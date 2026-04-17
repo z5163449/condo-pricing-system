@@ -1,0 +1,119 @@
+{
+  "appName": "Condo Pricing System",
+  "nav": {
+    "dashboard": "Dashboard",
+    "projectSetup": "Project Setup",
+    "pricingEngine": "Pricing Engine",
+    "export": "Export"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "add": "Add",
+    "loading": "Loading…",
+    "error": "Error",
+    "success": "Success",
+    "confirm": "Confirm",
+    "back": "Back",
+    "next": "Next",
+    "search": "Search",
+    "status": "Status",
+    "actions": "Actions",
+    "name": "Name",
+    "description": "Description",
+    "createdAt": "Created",
+    "updatedAt": "Updated"
+  },
+  "project": {
+    "title": "Projects",
+    "newProject": "New Project",
+    "nameEn": "Project Name (English)",
+    "nameZh": "Project Name (Chinese)",
+    "description": "Description",
+    "totalUnitsExpected": "Total Units Expected",
+    "roundingUnit": "Rounding Unit (SGD)",
+    "status": {
+      "label": "Status",
+      "draft": "Draft",
+      "inReview": "In Review",
+      "approved": "Approved"
+    },
+    "noProjects": "No projects yet. Create your first project to get started."
+  },
+  "block": {
+    "title": "Blocks",
+    "blockName": "Block Name",
+    "totalStoreys": "Total Storeys",
+    "startingFloor": "Starting Floor",
+    "excludedFloors": "Excluded Floors"
+  },
+  "stack": {
+    "title": "Stacks",
+    "stackNumber": "Stack No.",
+    "unitTypeCode": "Unit Type Code",
+    "bedroomType": "Bedroom Type",
+    "standardSizeSqft": "Standard Size (sqft)",
+    "facing": "Facing",
+    "notes": "Notes",
+    "hasPenthouse": "Has Penthouse"
+  },
+  "rank": {
+    "title": "Ranks",
+    "rankNumber": "Rank No.",
+    "labelEn": "Label (EN)",
+    "labelZh": "Label (ZH)",
+    "basePSF": "Base PSF (SGD)",
+    "rankDifferential": "Rank Differential"
+  },
+  "floorIncrement": {
+    "title": "Floor Increments",
+    "fromFloor": "From Floor",
+    "toFloor": "To Floor",
+    "incrementPSF": "Increment PSF (SGD)"
+  },
+  "unit": {
+    "title": "Units",
+    "unitNumber": "Unit No.",
+    "floor": "Floor",
+    "sizeSqft": "Size (sqft)",
+    "isPenthouse": "Penthouse",
+    "calculatedPSF": "Calc. PSF",
+    "calculatedPrice": "Calc. Price",
+    "finalPSF": "Final PSF",
+    "finalPrice": "Final Price",
+    "manualOverride": "Manual Override",
+    "isManualOverride": "Overridden"
+  },
+  "pricing": {
+    "title": "Pricing Engine",
+    "parameters": "Pricing Parameters",
+    "targetOverallAvgPSF": "Target Overall Avg PSF",
+    "target2BRPSF": "Target 2BR PSF",
+    "target3BRPSF": "Target 3BR PSF",
+    "target4BRPSF": "Target 4BR PSF",
+    "target5BRPSF": "Target 5BR PSF",
+    "defaultFloorIncrement": "Default Floor Increment (PSF/floor)",
+    "penthouseMultiplier": "Penthouse Multiplier",
+    "luckyFloorPremiums": "Lucky Floor Premiums",
+    "roundingUnit": "Rounding Unit",
+    "recalculate": "Recalculate Prices",
+    "saveSnapshot": "Save Snapshot"
+  },
+  "export": {
+    "title": "Export",
+    "toExcel": "Export to Excel",
+    "toPDF": "Export to PDF",
+    "selectProject": "Select a project to export",
+    "includeUnits": "Include Unit Details",
+    "includeSummary": "Include Summary Sheet"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome to the Condo Pricing System",
+    "totalProjects": "Total Projects",
+    "activeProjects": "Active Projects",
+    "recentActivity": "Recent Activity"
+  }
+}

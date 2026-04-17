@@ -1,0 +1,140 @@
+// Prisma schema for Condo Pricing System
+// Database: SQLite (development), can swap to PostgreSQL for production
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Project ──────────────────────────────────────────────────────────────────
+model Project {
+  id                 String              @id @default(cuid())
+  nameEn             String
+  nameZh             String
+  description        String?
+  totalUnitsExpected Int?
+  roundingUnit       Int                 @default(100)
+  status             String              @default("draft") // draft | in-review | approved
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  blocks             Block[]
+  ranks              Rank[]
+  pricingParameters  PricingParameters?
+  sessions           Session[]
+}
+
+// ─── Block ────────────────────────────────────────────────────────────────────
+model Block {
+  id              String   @id @default(cuid())
+  projectId       String
+  blockName       String
+  totalStoreys    Int
+  startingFloor   Int      @default(1)
+  excludedFloors  String   @default("[]") // JSON array: e.g. "[4, 13, 14]"
+
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stacks          Stack[]
+}
+
+// ─── Stack ────────────────────────────────────────────────────────────────────
+model Stack {
+  id               String   @id @default(cuid())
+  blockId          String
+  stackNumber      Int
+  unitTypeCode     String   // e.g. "A1", "B2"
+  bedroomType      String   // 2BR | 3BR | 4BR | 5BR
+  standardSizeSqft Float
+  facing           String?  // e.g. "North", "Pool View"
+  notes            String?
+  rankId           String?
+  hasPenthouse     Boolean  @default(false)
+  penthouseUse     String?  // e.g. "Rooftop Garden", "Sky Terrace"
+
+  block            Block    @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  rank             Rank?    @relation(fields: [rankId], references: [id])
+  units            Unit[]
+}
+
+// ─── Rank ─────────────────────────────────────────────────────────────────────
+model Rank {
+  id               String           @id @default(cuid())
+  projectId        String
+  rankNumber       Int
+  labelEn          String
+  labelZh          String
+  basePSF          Float
+  rankDifferential Float            @default(0)
+
+  project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stacks           Stack[]
+  floorIncrements  FloorIncrement[]
+}
+
+// ─── FloorIncrement ───────────────────────────────────────────────────────────
+model FloorIncrement {
+  id           String @id @default(cuid())
+  rankId       String
+  fromFloor    Int
+  toFloor      Int
+  incrementPSF Float
+
+  rank         Rank   @relation(fields: [rankId], references: [id], onDelete: Cascade)
+}
+
+// ─── Unit ─────────────────────────────────────────────────────────────────────
+model Unit {
+  id                  String  @id @default(cuid())
+  stackId             String
+  unitNumber          String  // e.g. "#05-01"
+  floor               Int
+  sizeSqft            Float
+  isPenthouse         Boolean @default(false)
+
+  // Calculated values (populated by pricing engine)
+  calculatedPSF       Float?
+  calculatedPrice     Float?
+
+  // Manual overrides
+  manualOverridePSF   Float?
+  manualOverridePrice Float?
+  isManualOverride    Boolean @default(false)
+
+  // Final values (override if set, else calculated)
+  finalPSF            Float?
+  finalPrice          Float?
+
+  stack               Stack   @relation(fields: [stackId], references: [id], onDelete: Cascade)
+}
+
+// ─── PricingParameters ────────────────────────────────────────────────────────
+model PricingParameters {
+  id                    String  @id @default(cuid())
+  projectId             String  @unique
+  targetOverallAvgPSF   Float?
+  target2BRPSF          Float?
+  target3BRPSF          Float?
+  target4BRPSF          Float?
+  target5BRPSF          Float?
+  defaultFloorIncrement Float   @default(10)
+  penthouseMultiplier   Float   @default(1.0)
+  luckyFloorPremiums    String  @default("{}") // JSON: e.g. {"8": 0.02, "18": 0.03}
+  roundingUnit          Int     @default(100)
+
+  project               Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ─── Session (snapshot) ───────────────────────────────────────────────────────
+model Session {
+  id           String   @id @default(cuid())
+  projectId    String
+  label        String
+  snapshotJSON String   // Full JSON snapshot of pricing at a point in time
+  createdAt    DateTime @default(now())
+
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}

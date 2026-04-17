@@ -1,0 +1,119 @@
+{
+  "appName": "公寓定价系统",
+  "nav": {
+    "dashboard": "仪表板",
+    "projectSetup": "项目设置",
+    "pricingEngine": "定价引擎",
+    "export": "导出"
+  },
+  "common": {
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "add": "添加",
+    "loading": "加载中…",
+    "error": "错误",
+    "success": "成功",
+    "confirm": "确认",
+    "back": "返回",
+    "next": "下一步",
+    "search": "搜索",
+    "status": "状态",
+    "actions": "操作",
+    "name": "名称",
+    "description": "描述",
+    "createdAt": "创建时间",
+    "updatedAt": "更新时间"
+  },
+  "project": {
+    "title": "项目列表",
+    "newProject": "新建项目",
+    "nameEn": "项目名称（英文）",
+    "nameZh": "项目名称（中文）",
+    "description": "描述",
+    "totalUnitsExpected": "预计单位总数",
+    "roundingUnit": "取整单位（新元）",
+    "status": {
+      "label": "状态",
+      "draft": "草稿",
+      "inReview": "审核中",
+      "approved": "已批准"
+    },
+    "noProjects": "暂无项目，请创建第一个项目。"
+  },
+  "block": {
+    "title": "楼栋",
+    "blockName": "楼栋名称",
+    "totalStoreys": "总楼层数",
+    "startingFloor": "起始楼层",
+    "excludedFloors": "排除楼层"
+  },
+  "stack": {
+    "title": "单元列",
+    "stackNumber": "列编号",
+    "unitTypeCode": "户型代码",
+    "bedroomType": "卧室类型",
+    "standardSizeSqft": "标准面积（平方英尺）",
+    "facing": "朝向",
+    "notes": "备注",
+    "hasPenthouse": "含顶层复式"
+  },
+  "rank": {
+    "title": "档次",
+    "rankNumber": "档次编号",
+    "labelEn": "标签（英文）",
+    "labelZh": "标签（中文）",
+    "basePSF": "基础单价（新元/平方英尺）",
+    "rankDifferential": "档次差价"
+  },
+  "floorIncrement": {
+    "title": "楼层递增",
+    "fromFloor": "起始楼层",
+    "toFloor": "结束楼层",
+    "incrementPSF": "递增单价（新元/平方英尺）"
+  },
+  "unit": {
+    "title": "单位",
+    "unitNumber": "单位编号",
+    "floor": "楼层",
+    "sizeSqft": "面积（平方英尺）",
+    "isPenthouse": "顶层复式",
+    "calculatedPSF": "计算单价",
+    "calculatedPrice": "计算总价",
+    "finalPSF": "最终单价",
+    "finalPrice": "最终总价",
+    "manualOverride": "手动调整",
+    "isManualOverride": "已调整"
+  },
+  "pricing": {
+    "title": "定价引擎",
+    "parameters": "定价参数",
+    "targetOverallAvgPSF": "目标整体平均单价",
+    "target2BRPSF": "目标两卧室单价",
+    "target3BRPSF": "目标三卧室单价",
+    "target4BRPSF": "目标四卧室单价",
+    "target5BRPSF": "目标五卧室单价",
+    "defaultFloorIncrement": "默认楼层递增（每层新元）",
+    "penthouseMultiplier": "顶层倍数",
+    "luckyFloorPremiums": "吉祥楼层溢价",
+    "roundingUnit": "取整单位",
+    "recalculate": "重新计算价格",
+    "saveSnapshot": "保存快照"
+  },
+  "export": {
+    "title": "导出",
+    "toExcel": "导出至 Excel",
+    "toPDF": "导出至 PDF",
+    "selectProject": "请选择要导出的项目",
+    "includeUnits": "包含单位明细",
+    "includeSummary": "包含汇总表"
+  },
+  "dashboard": {
+    "title": "仪表板",
+    "welcome": "欢迎使用公寓定价系统",
+    "totalProjects": "项目总数",
+    "activeProjects": "进行中项目",
+    "recentActivity": "近期动态"
+  }
+}

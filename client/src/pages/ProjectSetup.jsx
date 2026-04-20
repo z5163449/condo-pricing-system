@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const BEDROOM_TYPES = ['2BR', '3BR', '4BR', '5BR'];
+const BEDROOM_TYPES = ['Studio', '1BR', '2BR', '3BR', '4BR', '5BR', '6BR', 'Dual-Key', 'Shop'];
 
 const INITIAL_PROJECT_FORM = {
   nameEn: '', nameZh: '', description: '',
@@ -33,10 +33,9 @@ function excludedInputToArray(str) {
 function computeBlockUnits(block) {
   const blockExcl = parseExcluded(block.excludedFloors);
   return (block.stacks || []).reduce((sum, s) => {
-    const effStart = s.stackStartingFloor ?? block.startingFloor ?? 1;
     const stkExcl  = parseExcluded(s.stackExcludedFloors);
     const combined = new Set([...blockExcl, ...stkExcl]);
-    return sum + Math.max(0, (block.totalStoreys || 0) - effStart + 1 - combined.size);
+    return sum + Math.max(0, (block.totalStoreys || 0) + 1 - combined.size);
   }, 0);
 }
 
@@ -236,7 +235,6 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
     rankId:              stack.rankId ?? '',
     hasPenthouse:        stack.hasPenthouse ?? false,
     penthouseSizeSqft:   stack.penthouseSizeSqft?.toString() ?? '',
-    stackStartingFloor:  stack.stackStartingFloor?.toString() ?? '',
     stackExcludedFloors: parseExcluded(stack.stackExcludedFloors).join(', '),
   });
   const [saving, setSaving] = useState(false);
@@ -254,7 +252,6 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
         rankId:              stack.rankId ?? '',
         hasPenthouse:        stack.hasPenthouse ?? false,
         penthouseSizeSqft:   stack.penthouseSizeSqft?.toString() ?? '',
-        stackStartingFloor:  stack.stackStartingFloor?.toString() ?? '',
         stackExcludedFloors: parseExcluded(stack.stackExcludedFloors).join(', '),
       });
     }
@@ -280,7 +277,6 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
           rankId:              form.rankId || null,
           hasPenthouse:        form.hasPenthouse,
           penthouseSizeSqft:   form.penthouseSizeSqft ? Number(form.penthouseSizeSqft) : null,
-          stackStartingFloor:  form.stackStartingFloor !== '' ? Number(form.stackStartingFloor) : null,
           stackExcludedFloors: excludedInputToArray(form.stackExcludedFloors),
         }),
       });
@@ -331,9 +327,6 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
             ? stack.penthouseSizeSqft.toLocaleString()
             : ''}
         </td>
-        <td className="px-3 py-2 text-right tabular-nums text-gray-400 text-xs">
-          {stack.stackStartingFloor != null ? stack.stackStartingFloor : '—'}
-        </td>
         <td className="px-3 py-2 text-gray-400 text-xs">
           {parseExcluded(stack.stackExcludedFloors).join(', ') || '—'}
         </td>
@@ -369,9 +362,10 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
         />
       </td>
       <td className="px-2 py-1.5">
-        <select className="input text-xs" name="bedroomType" value={form.bedroomType} onChange={onChange}>
-          {BEDROOM_TYPES.map(bt => <option key={bt} value={bt}>{bt}</option>)}
-        </select>
+        <input
+          className="input w-24 text-xs" name="bedroomType" list="bedroom-type-options"
+          value={form.bedroomType} onChange={onChange} placeholder="3BR"
+        />
       </td>
       <td className="px-2 py-1.5">
         <input
@@ -409,14 +403,6 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
       </td>
       <td className="px-2 py-1.5">
         <input
-          className="input w-16 text-xs text-right" name="stackStartingFloor"
-          type="number" min="1"
-          placeholder={blockStartingFloor ?? '1'}
-          value={form.stackStartingFloor} onChange={onChange}
-        />
-      </td>
-      <td className="px-2 py-1.5">
-        <input
           className="input w-24 text-xs" name="stackExcludedFloors"
           placeholder="4, 13"
           value={form.stackExcludedFloors} onChange={onChange}
@@ -447,8 +433,7 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
     _key: Math.random().toString(36).slice(2),
     stackNumber: '', unitTypeCode: '', bedroomType: '3BR',
     standardSizeSqft: '', facing: '', rankId: '',
-    hasPenthouse: false, penthouseSizeSqft: '',
-    stackStartingFloor: '', stackExcludedFloors: '',
+    hasPenthouse: false, penthouseSizeSqft: '', stackExcludedFloors: '',
     error: null,
   });
 
@@ -482,7 +467,6 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
             rankId:            row.rankId || null,
             hasPenthouse:        row.hasPenthouse,
             penthouseSizeSqft:   row.penthouseSizeSqft ? Number(row.penthouseSizeSqft) : null,
-            stackStartingFloor:  row.stackStartingFloor !== '' ? Number(row.stackStartingFloor) : null,
             stackExcludedFloors: excludedInputToArray(row.stackExcludedFloors),
           }),
         }).then(async r => {
@@ -516,7 +500,6 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
     { label: t('stack.rank'),                req: false, cls: 'flex-1 min-w-[96px]' },
     { label: t('stack.hasPenthouse'),        req: false, cls: 'w-[36px] text-center' },
     { label: t('stack.penthouseSizeSqft'),   req: false, cls: 'w-[72px]' },
-    { label: t('stack.stackStartingFloor'),  req: false, cls: 'w-[64px]' },
     { label: t('stack.stackExcludedFloors'), req: false, cls: 'w-[80px]' },
   ];
 
@@ -546,10 +529,9 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
                 <input className="input text-xs w-[88px] shrink-0" placeholder="B2-m"
                   value={row.unitTypeCode} onChange={e => update(row._key, 'unitTypeCode', e.target.value)} />
                 {/* Bedroom */}
-                <select className="input text-xs w-[76px] shrink-0" value={row.bedroomType}
-                  onChange={e => update(row._key, 'bedroomType', e.target.value)}>
-                  {BEDROOM_TYPES.map(bt => <option key={bt} value={bt}>{bt}</option>)}
-                </select>
+                <input className="input text-xs w-[76px] shrink-0" list="bedroom-type-options"
+                  placeholder="3BR" value={row.bedroomType}
+                  onChange={e => update(row._key, 'bedroomType', e.target.value)} />
                 {/* Size */}
                 <input className="input text-xs text-right w-[76px] shrink-0" type="number" min="0" step="0.1" placeholder="sqft"
                   value={row.standardSizeSqft} onChange={e => update(row._key, 'standardSizeSqft', e.target.value)} />
@@ -574,11 +556,6 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
                         value={row.penthouseSizeSqft} onChange={e => update(row._key, 'penthouseSizeSqft', e.target.value)} />
                     : null}
                 </div>
-                {/* Stack starting floor */}
-                <input className="input text-xs text-right w-[64px] shrink-0" type="number" min="1"
-                  placeholder={blockStartingFloor ?? '1'}
-                  value={row.stackStartingFloor}
-                  onChange={e => update(row._key, 'stackStartingFloor', e.target.value)} />
                 {/* Stack excluded floors */}
                 <input className="input text-xs w-[80px] shrink-0" placeholder="4, 13"
                   value={row.stackExcludedFloors}
@@ -627,13 +604,16 @@ function StacksTable({ blockId, stacks, ranks, blockStartingFloor, onStacksAdded
     { label: t('stack.rank'),                 req: false },
     { label: t('stack.hasPenthouse'),         req: false },
     { label: t('stack.penthouseSizeSqft'),    req: false },
-    { label: t('stack.stackStartingFloor'),   req: false },
     { label: t('stack.stackExcludedFloors'),  req: false },
     { label: t('common.actions'),             req: false },
   ];
 
   return (
     <div className="border-t border-gray-100">
+      {/* Shared datalist for bedroom type combobox */}
+      <datalist id="bedroom-type-options">
+        {BEDROOM_TYPES.map(bt => <option key={bt} value={bt} />)}
+      </datalist>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
@@ -648,20 +628,22 @@ function StacksTable({ blockId, stacks, ranks, blockStartingFloor, onStacksAdded
           <tbody className="divide-y divide-gray-50">
             {stacks.length === 0 && !showAdd && (
               <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-gray-400">
+                <td colSpan={11} className="px-3 py-6 text-center text-gray-400">
                   {t('stack.noStacks')}
                 </td>
               </tr>
             )}
-            {stacks.map(stack => (
-              <StackRow
-                key={stack.id}
-                stack={stack}
-                ranks={ranks}
-                onSaved={onStackUpdated}
-                onDeleted={onStackDeleted}
-              />
-            ))}
+            {[...stacks]
+              .sort((a, b) => Number(a.stackNumber) - Number(b.stackNumber))
+              .map(stack => (
+                <StackRow
+                  key={stack.id}
+                  stack={stack}
+                  ranks={ranks}
+                  onSaved={onStackUpdated}
+                  onDeleted={onStackDeleted}
+                />
+              ))}
           </tbody>
         </table>
       </div>

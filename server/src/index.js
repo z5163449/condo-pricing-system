@@ -4,6 +4,7 @@ import cors from 'cors';
 import projectRoutes from './routes/projects.js';
 import blockRoutes from './routes/blocks.js';
 import rankRoutes from './routes/ranks.js';
+import stackRoutes from './routes/stacks.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -30,6 +31,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/projects', projectRoutes);
 app.use('/api/blocks', blockRoutes);
 app.use('/api/ranks', rankRoutes);
+app.use('/api/stacks', stackRoutes);
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────────
 app.use((req, res) => {

@@ -52,10 +52,13 @@ model Stack {
   facing           String?  // e.g. "North", "Pool View"
   notes            String?
   rankId           String?
-  hasPenthouse     Boolean  @default(false)
-  penthouseUse     String?  // e.g. "Rooftop Garden", "Sky Terrace"
+  hasPenthouse         Boolean  @default(false)
+  penthouseUse         String?  // e.g. "Rooftop Garden", "Sky Terrace"
+  penthouseSizeSqft    Float?   // size of penthouse unit (sqft), shown when hasPenthouse = true
+  stackStartingFloor   Int?     // overrides block startingFloor for this stack if set
+  stackExcludedFloors  String?  // JSON array of additional excluded floors (union with block excludedFloors)
 
-  block            Block    @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  block             Block    @relation(fields: [blockId], references: [id], onDelete: Cascade)
   rank             Rank?    @relation(fields: [rankId], references: [id])
   units            Unit[]
 }

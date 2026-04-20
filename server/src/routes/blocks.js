@@ -85,4 +85,44 @@ router.delete('/:id', async (req, res, next) => {
   }
 });
 
+// ─── Nested stack routes ──────────────────────────────────────────────────────
+
+// POST /api/blocks/:blockId/stacks — create a stack inside a block
+router.post('/:blockId/stacks', async (req, res, next) => {
+  try {
+    const { blockId } = req.params;
+    const {
+      stackNumber, unitTypeCode, bedroomType, standardSizeSqft,
+      facing, notes, rankId, hasPenthouse, penthouseUse, penthouseSizeSqft,
+      stackStartingFloor, stackExcludedFloors,
+    } = req.body;
+
+    if (!unitTypeCode || !bedroomType || standardSizeSqft === undefined) {
+      return res.status(400).json({ error: 'unitTypeCode, bedroomType, and standardSizeSqft are required' });
+    }
+
+    const stack = await prisma.stack.create({
+      data: {
+        blockId,
+        stackNumber:          stackNumber !== undefined ? Number(stackNumber) : 0,
+        unitTypeCode,
+        bedroomType,
+        standardSizeSqft:     Number(standardSizeSqft),
+        facing:               facing ?? null,
+        notes:                notes ?? null,
+        rankId:               rankId || null,
+        hasPenthouse:         hasPenthouse ?? false,
+        penthouseUse:         penthouseUse ?? null,
+        penthouseSizeSqft:    penthouseSizeSqft ? Number(penthouseSizeSqft) : null,
+        stackStartingFloor:   stackStartingFloor != null ? Number(stackStartingFloor) : null,
+        stackExcludedFloors:  stackExcludedFloors != null ? JSON.stringify(stackExcludedFloors) : null,
+      },
+      include: { rank: true },
+    });
+    res.status(201).json(stack);
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

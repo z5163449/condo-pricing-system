@@ -30,12 +30,31 @@ function excludedInputToArray(str) {
     .map(Number).filter(n => !isNaN(n) && Number.isInteger(n));
 }
 
+function hasOverlap(bands) {
+  for (let i = 0; i < bands.length; i++) {
+    for (let j = i + 1; j < bands.length; j++) {
+      if (Number(bands[i].fromFloor) <= Number(bands[j].toFloor) &&
+          Number(bands[j].fromFloor) <= Number(bands[i].toFloor)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function computeBlockUnits(block) {
   const blockExcl = parseExcluded(block.excludedFloors);
   return (block.stacks || []).reduce((sum, s) => {
     const stkExcl  = parseExcluded(s.stackExcludedFloors);
-    const combined = new Set([...blockExcl, ...stkExcl]);
-    return sum + Math.max(0, (block.totalStoreys || 0) + 1 - combined.size);
+    
+    let excludedCount = 0;
+
+    for (let floor = 1; floor <= (block.totalStoreys || 0); floor++) {
+      if (blockExcl.includes(floor) || stkExcl.includes(floor)) {
+        excludedCount++;
+      }
+    }
+    return sum + Math.max(0, (block.totalStoreys || 0) - excludedCount);
   }, 0);
 }
 
@@ -43,11 +62,35 @@ function computeConfiguredUnits(blocks) {
   return blocks.reduce((sum, b) => sum + computeBlockUnits(b), 0);
 }
 
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function Toast({ message, type, onDismiss }) {
+  useEffect(() => {
+    const timer = setTimeout(onDismiss, 5000);
+    return () => clearTimeout(timer);
+  }, [onDismiss]);
+
+  const bgCls = type === 'success' ? 'bg-green-800' : 'bg-red-700';
+  const icon  = type === 'success' ? '✓' : '✗';
+
+  return (
+    <div className={`fixed bottom-6 right-6 z-50 ${bgCls} text-white px-4 py-3 rounded-xl
+                     shadow-xl text-sm flex items-center gap-3 max-w-sm animate-fade-in`}>
+      <span className="text-base leading-none font-bold">{icon}</span>
+      <span className="flex-1">{message}</span>
+      <button
+        className="opacity-60 hover:opacity-100 transition-opacity leading-none ml-1"
+        onClick={onDismiss}
+      >✕</button>
+    </div>
+  );
+}
+
 // ─── ChecksumBar ──────────────────────────────────────────────────────────────
-function ChecksumBar({ configured, expected }) {
+function ChecksumBar({ configured, expected, projectId, onGenerate, generating }) {
   const { t } = useTranslation();
-  const hasTarget = expected != null && expected > 0;
-  const diff      = hasTarget ? configured - expected : 0;
+  const hasTarget  = expected != null && expected > 0;
+  const diff       = hasTarget ? configured - expected : 0;
+  const canGenerate = hasTarget && diff === 0 && !!projectId && !generating;
 
   let bgCls, icon, detail;
   if (!hasTarget || diff === 0) {
@@ -66,18 +109,55 @@ function ChecksumBar({ configured, expected }) {
 
   return (
     <div
-      className={`${bgCls} text-white px-4 sm:px-6 lg:px-8 py-2.5
-                  flex items-center justify-between text-sm font-medium shadow-md
+      className={`${bgCls} text-white px-4 sm:px-6 lg:px-8 py-2
+                  flex items-center justify-between gap-4 text-sm font-medium shadow-md
                   sticky top-0 z-30`}
     >
-      <span>
+      <span className="shrink-0">
         {icon}&nbsp; {t('block.unitsConfigured')}:&nbsp;
         <strong>{configured.toLocaleString()}</strong>
         {hasTarget && (
           <> / <strong>{expected.toLocaleString()}</strong></>
         )}
       </span>
-      {detail && <span className="text-xs opacity-90">{detail}</span>}
+
+      <div className="flex items-center gap-3 min-w-0">
+        {detail && <span className="text-xs opacity-90 hidden sm:block truncate">{detail}</span>}
+
+        {projectId && (
+          <button
+            onClick={onGenerate}
+            disabled={!canGenerate}
+            title={!canGenerate && !generating ? t('generate.disabledHint') : undefined}
+            className={`shrink-0 flex items-center gap-1.5 text-xs font-semibold
+                        px-3 py-1.5 rounded-lg border transition-colors whitespace-nowrap
+                        ${canGenerate
+                          ? 'border-white/50 bg-white/15 hover:bg-white/25 text-white cursor-pointer'
+                          : 'border-white/20 bg-white/5 text-white/40 cursor-not-allowed'
+                        }`}
+          >
+            {generating ? (
+              <>
+                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10"
+                    stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {t('generate.generating')}
+              </>
+            ) : (
+              <>
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                {t('generate.generateUnits')}
+              </>
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -747,10 +827,29 @@ function BlockCard({ block, ranks, onUpdate, onDelete }) {
   }
 
   // Computed stats for header
-  const excl       = parseExcluded(block.excludedFloors);
-  const floorCount = Math.max(0, block.totalStoreys - block.startingFloor + 1 - excl.length);
+  const floorCount = Math.max(0, block.totalStoreys - block.startingFloor + 1 - parseExcluded(block.excludedFloors).length);
+  const excl       = new Set(parseExcluded(block.excludedFloors).map(Number));
+  const totalFloors = Math.max(0, block.totalStoreys - block.startingFloor + 1);
+
+  // build all floors once
+  const allFloors = Array.from(
+    { length: totalFloors },
+    (_, i) => block.startingFloor + i
+  );
+
   const stackCount = (block.stacks || []).length;
-  const unitCount  = floorCount * stackCount;
+
+  const unitCount = (block.stacks || []).reduce((total, stack) => {
+    const stackExcl = new Set(
+      parseExcluded(stack.stackExcludedFloors).map(Number)
+    );
+
+    const validCount = allFloors.filter(
+      floor => !excl.has(floor) && !stackExcl.has(floor)
+    ).length;
+
+    return total + validCount;
+  }, 0);
 
   return (
     <div className="border border-gray-200 rounded-xl bg-white overflow-hidden shadow-sm">
@@ -867,6 +966,481 @@ function BlockCard({ block, ranks, onUpdate, onDelete }) {
   );
 }
 
+// ─── FloorIncrementsTable ─────────────────────────────────────────────────────
+function FloorIncrementsTable({ rankId, increments, onAdded, onDeleted }) {
+  const { t } = useTranslation();
+  const [showAdd, setShowAdd] = useState(false);
+  const [addForm, setAddForm] = useState({ fromFloor: '', toFloor: '', incrementPSF: '' });
+  const [adding, setAdding]   = useState(false);
+  const [error, setError]     = useState(null);
+
+  const overlap = hasOverlap(increments);
+
+  async function addBand() {
+    setAdding(true); setError(null);
+    try {
+      const res = await fetch(`/api/ranks/${rankId}/increments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromFloor:    Number(addForm.fromFloor),
+          toFloor:      Number(addForm.toFloor),
+          incrementPSF: Number(addForm.incrementPSF),
+        }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const created = await res.json();
+      onAdded(created);
+      setAddForm({ fromFloor: '', toFloor: '', incrementPSF: '' });
+      setShowAdd(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function deleteBand(id) {
+    if (!window.confirm(t('floorIncrement.deleteConfirm'))) return;
+    await fetch(`/api/increments/${id}`, { method: 'DELETE' });
+    onDeleted(id);
+  }
+
+  const canAdd = addForm.fromFloor !== '' && addForm.toFloor !== '' && addForm.incrementPSF !== '';
+
+  return (
+    <div className="border-t border-gray-100">
+      {overlap && (
+        <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-700 font-medium">
+          ⚠ {t('floorIncrement.overlapWarning')}
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-100 text-left text-gray-500">
+              <th className="px-3 py-2 font-medium">{t('floorIncrement.fromFloor')}</th>
+              <th className="px-3 py-2 font-medium">{t('floorIncrement.toFloor')}</th>
+              <th className="px-3 py-2 font-medium text-right">{t('floorIncrement.incrementPSF')}</th>
+              <th className="px-3 py-2 w-12" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {increments.length === 0 && !showAdd && (
+              <tr>
+                <td colSpan={4} className="px-3 py-5 text-center text-gray-400">
+                  {t('floorIncrement.noBands')}
+                </td>
+              </tr>
+            )}
+            {increments.map(fi => (
+              <tr key={fi.id} className="hover:bg-gray-50 group">
+                <td className="px-3 py-1.5 tabular-nums">{fi.fromFloor}</td>
+                <td className="px-3 py-1.5 tabular-nums">{fi.toFloor}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums font-medium text-green-700">
+                  +{Number(fi.incrementPSF).toFixed(2)}
+                </td>
+                <td className="px-3 py-1.5 text-right">
+                  <button
+                    className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => deleteBand(fi.id)}
+                  >✕</button>
+                </td>
+              </tr>
+            ))}
+            {showAdd && (
+              <tr className="bg-brand-50 border-y border-brand-100">
+                <td className="px-2 py-1.5">
+                  <input
+                    className="input w-16 text-xs text-center" type="number" min="1" placeholder="1"
+                    value={addForm.fromFloor}
+                    onChange={e => setAddForm(p => ({ ...p, fromFloor: e.target.value }))}
+                    autoFocus
+                  />
+                </td>
+                <td className="px-2 py-1.5">
+                  <input
+                    className="input w-16 text-xs text-center" type="number" min="1" placeholder="99"
+                    value={addForm.toFloor}
+                    onChange={e => setAddForm(p => ({ ...p, toFloor: e.target.value }))}
+                  />
+                </td>
+                <td className="px-2 py-1.5">
+                  <input
+                    className="input w-24 text-xs text-right" type="number" step="0.01" placeholder="6.00"
+                    value={addForm.incrementPSF}
+                    onChange={e => setAddForm(p => ({ ...p, incrementPSF: e.target.value }))}
+                  />
+                </td>
+                <td className="px-2 py-1.5">
+                  <div className="flex gap-1 justify-end">
+                    <button
+                      className="btn-primary text-xs px-2 py-1"
+                      onClick={addBand} disabled={adding || !canAdd}
+                    >{adding ? '…' : t('common.save')}</button>
+                    <button
+                      className="btn-secondary text-xs px-2 py-1"
+                      onClick={() => { setShowAdd(false); setAddForm({ fromFloor: '', toFloor: '', incrementPSF: '' }); setError(null); }}
+                    >{t('common.cancel')}</button>
+                  </div>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {error && <p className="px-3 pb-1 text-xs text-red-600">{error}</p>}
+
+      {!showAdd && (
+        <div className="px-3 py-2 border-t border-gray-100 bg-gray-50">
+          <button
+            className="text-xs font-medium text-brand-600 hover:underline"
+            onClick={() => setShowAdd(true)}
+          >+ {t('floorIncrement.addBand')}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── AddRankPanel ─────────────────────────────────────────────────────────────
+function AddRankPanel({ projectId, onSaved, onCancel }) {
+  const { t } = useTranslation();
+  const [form, setForm]     = useState({ rankNumber: '', labelEn: '', labelZh: '', basePSF: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError]   = useState(null);
+
+  function onChange(e) {
+    const { name, value } = e.target;
+    setForm(p => ({ ...p, [name]: value }));
+  }
+
+  async function save() {
+    setSaving(true); setError(null);
+    try {
+      const res = await fetch('/api/ranks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          rankNumber: form.rankNumber ? Number(form.rankNumber) : 1,
+          labelEn:    form.labelEn.trim(),
+          labelZh:    form.labelZh.trim(),
+          basePSF:    Number(form.basePSF),
+        }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const created = await res.json();
+      onSaved({ ...created, floorIncrements: [] });
+      onCancel();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const canSave = form.labelEn.trim() && form.labelZh.trim() && form.basePSF !== '';
+
+  return (
+    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-gray-700">{t('rank.addRank')}</h3>
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div>
+          <label className="label text-xs">{t('rank.rankNumber')}</label>
+          <input className="input text-xs" name="rankNumber" type="number" min="1" placeholder="1"
+            value={form.rankNumber} onChange={onChange} />
+        </div>
+        <div>
+          <label className="label text-xs">{t('rank.labelEn')} <span className="text-red-500">*</span></label>
+          <input className="input text-xs" name="labelEn" placeholder="Premium"
+            value={form.labelEn} onChange={onChange} />
+        </div>
+        <div>
+          <label className="label text-xs">{t('rank.labelZh')} <span className="text-red-500">*</span></label>
+          <input className="input text-xs" name="labelZh" placeholder="优质"
+            value={form.labelZh} onChange={onChange} />
+        </div>
+        <div>
+          <label className="label text-xs">{t('rank.basePSF')} <span className="text-red-500">*</span></label>
+          <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01" placeholder="1500"
+            value={form.basePSF} onChange={onChange} />
+        </div>
+      </div>
+      <div className="flex gap-2 justify-end pt-1 border-t border-gray-200">
+        <button type="button" className="btn-secondary" onClick={onCancel}>{t('common.cancel')}</button>
+        <button type="button" className="btn-primary" onClick={save} disabled={saving || !canSave}>
+          {saving ? t('common.loading') : t('common.save')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── RankCard ─────────────────────────────────────────────────────────────────
+function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded]   = useState(false);
+  const [editing, setEditing]     = useState(false);
+  const [editForm, setEditForm]   = useState({
+    rankNumber: rank.rankNumber.toString(),
+    labelEn:    rank.labelEn,
+    labelZh:    rank.labelZh,
+    basePSF:    rank.basePSF.toString(),
+  });
+  const [saving, setSaving]       = useState(false);
+  const [error, setError]         = useState(null);
+  const [duplicating, setDuplicating] = useState(false);
+  const [dupBasePSF, setDupBasePSF]   = useState('');
+  const [dupSaving, setDupSaving]     = useState(false);
+  const [dupError, setDupError]       = useState(null);
+
+  useEffect(() => {
+    if (!editing) {
+      setEditForm({
+        rankNumber: rank.rankNumber.toString(),
+        labelEn:    rank.labelEn,
+        labelZh:    rank.labelZh,
+        basePSF:    rank.basePSF.toString(),
+      });
+    }
+  }, [rank, editing]);
+
+  function onChange(e) {
+    const { name, value } = e.target;
+    setEditForm(p => ({ ...p, [name]: value }));
+  }
+
+  async function saveRank() {
+    setSaving(true); setError(null);
+    try {
+      const res = await fetch(`/api/ranks/${rank.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rankNumber: Number(editForm.rankNumber),
+          labelEn:    editForm.labelEn,
+          labelZh:    editForm.labelZh,
+          basePSF:    Number(editForm.basePSF),
+        }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const updated = await res.json();
+      onUpdate({ ...updated, floorIncrements: rank.floorIncrements });
+      setEditing(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteRank() {
+    if (!window.confirm(t('rank.deleteConfirm', { label: rank.labelEn }))) return;
+    await fetch(`/api/ranks/${rank.id}`, { method: 'DELETE' });
+    onDelete(rank.id);
+  }
+
+  async function confirmDuplicate() {
+    setDupSaving(true); setDupError(null);
+    try {
+      const res = await fetch('/api/ranks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId:         rank.projectId,
+          rankNumber:        rank.rankNumber,
+          labelEn:           rank.labelEn + ' (copy)',
+          labelZh:           rank.labelZh + '（复制）',
+          basePSF:           Number(dupBasePSF),
+          rankDifferential:  rank.rankDifferential,
+          floorIncrements:   (rank.floorIncrements || []).map(fi => ({
+            fromFloor: fi.fromFloor, toFloor: fi.toFloor, incrementPSF: fi.incrementPSF,
+          })),
+        }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const newRank = await res.json();
+      onDuplicated(newRank);
+      setDuplicating(false);
+      setDupBasePSF('');
+    } catch (err) {
+      setDupError(err.message);
+    } finally {
+      setDupSaving(false);
+    }
+  }
+
+  // Increment mutation callbacks — update rank in-place and bubble up
+  function handleIncrementAdded(fi) {
+    const sorted = [...(rank.floorIncrements || []), fi].sort((a, b) => a.fromFloor - b.fromFloor);
+    onUpdate({ ...rank, floorIncrements: sorted });
+  }
+
+  function handleIncrementDeleted(fiId) {
+    onUpdate({ ...rank, floorIncrements: (rank.floorIncrements || []).filter(fi => fi.id !== fiId) });
+  }
+
+  const bandCount = rank.floorIncrements?.length ?? 0;
+
+  return (
+    <div className="border border-gray-200 rounded-xl bg-white overflow-hidden shadow-sm">
+      {/* ── Card header ────────────────────────────────────────────────────── */}
+      <div className="px-4 py-3 flex items-start justify-between gap-3">
+        {/* Info / edit form */}
+        {!editing ? (
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <span className="text-xs font-mono text-gray-400 tabular-nums">#{rank.rankNumber}</span>
+              <span className="font-semibold text-gray-900 text-sm">{rank.labelEn}</span>
+              <span className="text-xs text-gray-500">{rank.labelZh}</span>
+              <span className="text-xs font-semibold text-brand-600 tabular-nums">
+                S${Number(rank.basePSF).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} psf
+              </span>
+            </div>
+            {bandCount > 0 && (
+              <div className="mt-0.5 text-xs text-gray-400">
+                {bandCount} {t('floorIncrement.title').toLowerCase()}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {error && <p className="col-span-full text-xs text-red-600">{error}</p>}
+            <div>
+              <label className="label text-xs">{t('rank.rankNumber')} <span className="text-red-500">*</span></label>
+              <input className="input text-xs" name="rankNumber" type="number" min="1"
+                value={editForm.rankNumber} onChange={onChange} />
+            </div>
+            <div>
+              <label className="label text-xs">{t('rank.labelEn')} <span className="text-red-500">*</span></label>
+              <input className="input text-xs" name="labelEn" value={editForm.labelEn} onChange={onChange} />
+            </div>
+            <div>
+              <label className="label text-xs">{t('rank.labelZh')} <span className="text-red-500">*</span></label>
+              <input className="input text-xs" name="labelZh" value={editForm.labelZh} onChange={onChange} />
+            </div>
+            <div>
+              <label className="label text-xs">{t('rank.basePSF')} <span className="text-red-500">*</span></label>
+              <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01"
+                value={editForm.basePSF} onChange={onChange} />
+            </div>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+          {editing ? (
+            <>
+              <button
+                className="btn-primary text-xs px-2 py-1"
+                onClick={saveRank} disabled={saving || !editForm.labelEn || !editForm.basePSF}
+              >{saving ? '…' : t('common.save')}</button>
+              <button
+                className="btn-secondary text-xs px-2 py-1"
+                onClick={() => { setEditing(false); setError(null); }}
+              >{t('common.cancel')}</button>
+            </>
+          ) : (
+            <>
+              {/* Edit */}
+              <button
+                className="p-1.5 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+                onClick={() => setEditing(true)} title={t('common.edit')}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828A2 2 0 0110 16.414H8v-2a2 2 0 01.586-1.414z" />
+                </svg>
+              </button>
+              {/* Duplicate */}
+              <button
+                className={`p-1.5 rounded transition-colors ${
+                  duplicating
+                    ? 'text-indigo-600 bg-indigo-50'
+                    : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
+                }`}
+                onClick={() => { setDuplicating(v => !v); setDupBasePSF(rank.basePSF.toString()); setDupError(null); }}
+                title={t('rank.duplicate')}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </button>
+              {/* Delete */}
+              <button
+                className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                onClick={deleteRank} title={t('common.delete')}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3M4 7h16" />
+                </svg>
+              </button>
+              {/* Expand increments */}
+              <button
+                className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded font-medium transition-colors ${
+                  expanded
+                    ? 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+                onClick={() => setExpanded(v => !v)}
+              >
+                {t('floorIncrement.title')}
+                <svg className={`w-3 h-3 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Duplicate inline form ─────────────────────────────────────────── */}
+      {duplicating && (
+        <div className="px-4 py-3 border-t border-indigo-100 bg-indigo-50 flex flex-wrap items-end gap-3">
+          <div>
+            <label className="label text-xs">
+              {t('rank.duplicateBasePSF')} <span className="text-red-500">*</span>
+            </label>
+            <input
+              className="input w-36 text-xs" type="number" min="0" step="0.01"
+              value={dupBasePSF} onChange={e => setDupBasePSF(e.target.value)}
+              autoFocus
+            />
+          </div>
+          {dupError && <p className="text-xs text-red-600 self-center">{dupError}</p>}
+          <div className="flex gap-2 self-end">
+            <button
+              className="btn-primary text-xs px-2 py-1"
+              onClick={confirmDuplicate} disabled={dupSaving || !dupBasePSF}
+            >{dupSaving ? '…' : t('rank.duplicateTitle')}</button>
+            <button
+              className="btn-secondary text-xs px-2 py-1"
+              onClick={() => { setDuplicating(false); setDupError(null); }}
+            >{t('common.cancel')}</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Floor increments table (expanded) ────────────────────────────── */}
+      {expanded && (
+        <FloorIncrementsTable
+          rankId={rank.id}
+          increments={rank.floorIncrements || []}
+          onAdded={handleIncrementAdded}
+          onDeleted={handleIncrementDeleted}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── ProjectSetup (main page) ─────────────────────────────────────────────────
 export default function ProjectSetup() {
   const { t }         = useTranslation();
@@ -887,6 +1461,13 @@ export default function ProjectSetup() {
 
   // Block management
   const [showAddBlock, setShowAddBlock] = useState(false);
+
+  // Rank management
+  const [showAddRank, setShowAddRank] = useState(false);
+
+  // Unit generation
+  const [generating, setGenerating] = useState(false);
+  const [toast, setToast]           = useState(null); // { type: 'success'|'error', message }
 
   // Load project list for sidebar
   useEffect(() => {
@@ -980,6 +1561,34 @@ export default function ProjectSetup() {
     setBlocks(prev => prev.filter(b => b.id !== blockId));
   }
 
+  // ── Rank handlers ──
+  function handleRankAdded(rank) {
+    setRanks(prev => [...prev, rank].sort((a, b) => a.rankNumber - b.rankNumber));
+  }
+
+  function handleRankUpdated(rank) {
+    setRanks(prev => prev.map(r => r.id === rank.id ? rank : r));
+  }
+
+  function handleRankDeleted(rankId) {
+    setRanks(prev => prev.filter(r => r.id !== rankId));
+  }
+
+  // ── Unit generation ──
+  async function handleGenerate() {
+    setGenerating(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/generate-units`, { method: 'POST' });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const data = await res.json();
+      setToast({ type: 'success', message: t('generate.success', { count: data.totalUnits }) });
+    } catch (err) {
+      setToast({ type: 'error', message: err.message || t('generate.error') });
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   const configuredUnits = computeConfiguredUnits(blocks);
   const expectedUnits   = project?.totalUnitsExpected ?? null;
 
@@ -988,7 +1597,13 @@ export default function ProjectSetup() {
     <div className="-mx-4 sm:-mx-6 lg:-mx-8">
       {/* ── Sticky checksum bar ─────────────────────────────────────────────── */}
       {project && (
-        <ChecksumBar configured={configuredUnits} expected={expectedUnits} />
+        <ChecksumBar
+          configured={configuredUnits}
+          expected={expectedUnits}
+          projectId={projectId}
+          onGenerate={handleGenerate}
+          generating={generating}
+        />
       )}
 
       <div className="px-4 sm:px-6 lg:px-8 py-6 space-y-8">
@@ -1179,7 +1794,65 @@ export default function ProjectSetup() {
             )}
           </div>
         )}
+
+        {/* ── Ranks section (only when a project is selected) ─────────────────── */}
+        {projectId && project && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900">{t('rank.title')}</h2>
+              <button
+                className={showAddRank ? 'btn-secondary' : 'btn-primary'}
+                onClick={() => setShowAddRank(v => !v)}
+              >
+                {showAddRank ? t('common.cancel') : `+ ${t('rank.addRank')}`}
+              </button>
+            </div>
+
+            {showAddRank && (
+              <AddRankPanel
+                projectId={projectId}
+                onSaved={handleRankAdded}
+                onCancel={() => setShowAddRank(false)}
+              />
+            )}
+
+            {!loading && ranks.length === 0 && !showAddRank && (
+              <div className="card text-center py-10 text-gray-400">
+                <div className="text-3xl mb-2">📊</div>
+                <p className="text-sm">{t('rank.noRanks')}</p>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              {ranks.map(rank => (
+                <RankCard
+                  key={rank.id}
+                  rank={rank}
+                  onUpdate={handleRankUpdated}
+                  onDelete={handleRankDeleted}
+                  onDuplicated={handleRankAdded}
+                />
+              ))}
+            </div>
+
+            {ranks.length > 0 && (
+              <div className="text-xs text-gray-400 text-right">
+                {ranks.length} {t('rank.title').toLowerCase()}
+                {' · '}
+                {ranks.reduce((n, r) => n + (r.floorIncrements?.length ?? 0), 0)} {t('floorIncrement.title').toLowerCase()}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onDismiss={() => setToast(null)}
+        />
+      )}
     </div>
   );
 }

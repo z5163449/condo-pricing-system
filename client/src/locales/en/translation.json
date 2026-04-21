@@ -84,13 +84,24 @@
     "labelEn": "Label (EN)",
     "labelZh": "Label (ZH)",
     "basePSF": "Base PSF (SGD)",
-    "rankDifferential": "Rank Differential"
+    "rankDifferential": "Rank Differential",
+    "addRank": "Add Rank",
+    "editRank": "Edit Rank",
+    "deleteConfirm": "Delete rank \"{{label}}\"? All floor increment bands will be removed.",
+    "duplicate": "Duplicate",
+    "duplicateTitle": "Create Duplicate",
+    "duplicateBasePSF": "Base PSF for new rank",
+    "noRanks": "No ranks configured yet. Add a rank to get started."
   },
   "floorIncrement": {
     "title": "Floor Increments",
     "fromFloor": "From Floor",
     "toFloor": "To Floor",
-    "incrementPSF": "Increment PSF (SGD)"
+    "incrementPSF": "Increment PSF (SGD)",
+    "addBand": "Add Band",
+    "deleteConfirm": "Delete this floor increment band?",
+    "overlapWarning": "Floor ranges overlap — please fix before saving.",
+    "noBands": "No increment bands — units will use base PSF only."
   },
   "unit": {
     "title": "Units",
@@ -127,6 +138,13 @@
     "selectProject": "Select a project to export",
     "includeUnits": "Include Unit Details",
     "includeSummary": "Include Summary Sheet"
+  },
+  "generate": {
+    "generateUnits": "Generate Units",
+    "generating": "Generating…",
+    "success": "Generated {{count}} units successfully",
+    "error": "Failed to generate units",
+    "disabledHint": "Unit count must match expected total before generating"
   },
   "dashboard": {
     "title": "Dashboard",

@@ -96,4 +96,26 @@ router.delete('/:id', async (req, res, next) => {
   }
 });
 
+// POST /api/ranks/:rankId/increments — add a floor increment band to a rank
+router.post('/:rankId/increments', async (req, res, next) => {
+  try {
+    const { rankId } = req.params;
+    const { fromFloor, toFloor, incrementPSF } = req.body;
+    if (fromFloor === undefined || toFloor === undefined || incrementPSF === undefined) {
+      return res.status(400).json({ error: 'fromFloor, toFloor, and incrementPSF are required' });
+    }
+    const increment = await prisma.floorIncrement.create({
+      data: {
+        rankId,
+        fromFloor:    Number(fromFloor),
+        toFloor:      Number(toFloor),
+        incrementPSF: Number(incrementPSF),
+      },
+    });
+    res.status(201).json(increment);
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

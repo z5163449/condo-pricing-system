@@ -84,13 +84,24 @@
     "labelEn": "标签（英文）",
     "labelZh": "标签（中文）",
     "basePSF": "基础单价（新元/平方英尺）",
-    "rankDifferential": "档次差价"
+    "rankDifferential": "档次差价",
+    "addRank": "添加档次",
+    "editRank": "编辑档次",
+    "deleteConfirm": "删除档次「{{label}}」？所有楼层递增设置将被移除。",
+    "duplicate": "复制",
+    "duplicateTitle": "创建副本",
+    "duplicateBasePSF": "新档次基础单价",
+    "noRanks": "暂无档次，请添加档次。"
   },
   "floorIncrement": {
     "title": "楼层递增",
     "fromFloor": "起始楼层",
     "toFloor": "结束楼层",
-    "incrementPSF": "递增单价（新元/平方英尺）"
+    "incrementPSF": "递增单价（新元/平方英尺）",
+    "addBand": "添加楼层段",
+    "deleteConfirm": "删除此楼层递增？",
+    "overlapWarning": "楼层范围重叠，请修正后再保存。",
+    "noBands": "暂无楼层递增设置，单位将使用基础单价。"
   },
   "unit": {
     "title": "单位",
@@ -127,6 +138,13 @@
     "selectProject": "请选择要导出的项目",
     "includeUnits": "包含单位明细",
     "includeSummary": "包含汇总表"
+  },
+  "generate": {
+    "generateUnits": "生成单位",
+    "generating": "生成中…",
+    "success": "已成功生成 {{count}} 个单位",
+    "error": "单位生成失败",
+    "disabledHint": "请先使单位数量与预期一致"
   },
   "dashboard": {
     "title": "仪表板",

@@ -5,6 +5,7 @@ import projectRoutes from './routes/projects.js';
 import blockRoutes from './routes/blocks.js';
 import rankRoutes from './routes/ranks.js';
 import stackRoutes from './routes/stacks.js';
+import incrementRoutes from './routes/increments.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,6 +33,7 @@ app.use('/api/projects', projectRoutes);
 app.use('/api/blocks', blockRoutes);
 app.use('/api/ranks', rankRoutes);
 app.use('/api/stacks', stackRoutes);
+app.use('/api/increments', incrementRoutes);
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────────
 app.use((req, res) => {

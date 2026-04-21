@@ -85,6 +85,8 @@
     "labelZh": "Label (ZH)",
     "basePSF": "Base PSF (SGD)",
     "rankDifferential": "Rank Differential",
+    "lockBasePSF": "Lock Base PSF (solver will not override this rank)",
+    "locked": "Locked",
     "addRank": "Add Rank",
     "editRank": "Edit Rank",
     "deleteConfirm": "Delete rank \"{{label}}\"? All floor increment bands will be removed.",
@@ -161,6 +163,17 @@
     "success": "Generated {{count}} units successfully",
     "error": "Failed to generate units",
     "disabledHint": "Unit count must match expected total before generating"
+  },
+  "pricingParams": {
+    "title": "Pricing Parameters",
+    "targetOverallAvgPSF": "Target Overall Avg PSF",
+    "bedroomTargets": "Target PSF by Bedroom Type (optional)",
+    "targetBRPSF": "Target {{br}} PSF",
+    "penthouseMultiplier": "Penthouse Multiplier",
+    "roundingUnit": "Rounding Unit (SGD)",
+    "save": "Save Parameters",
+    "saving": "Saving…",
+    "noBedroomTargets": "No targetable bedroom types found in stacks (2BR–5BR required)"
   },
   "dashboard": {
     "title": "Dashboard",

@@ -35,7 +35,7 @@ router.get('/:id', async (req, res, next) => {
 // POST /api/ranks
 router.post('/', async (req, res, next) => {
   try {
-    const { projectId, rankNumber, labelEn, labelZh, basePSF, rankDifferential, floorIncrements } = req.body;
+    const { projectId, rankNumber, labelEn, labelZh, basePSF, basePSFLocked, rankDifferential, floorIncrements } = req.body;
     if (!projectId || !labelEn || !labelZh || basePSF === undefined) {
       return res.status(400).json({ error: 'projectId, labelEn, labelZh, and basePSF are required' });
     }
@@ -45,7 +45,8 @@ router.post('/', async (req, res, next) => {
         rankNumber: rankNumber ?? 1,
         labelEn,
         labelZh,
-        basePSF: Number(basePSF),
+        basePSF:          Number(basePSF),
+        basePSFLocked:    basePSFLocked ?? false,
         rankDifferential: rankDifferential ? Number(rankDifferential) : 0,
         floorIncrements: floorIncrements
           ? { create: floorIncrements.map(fi => ({
@@ -66,14 +67,15 @@ router.post('/', async (req, res, next) => {
 // PATCH /api/ranks/:id
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { rankNumber, labelEn, labelZh, basePSF, rankDifferential } = req.body;
+    const { rankNumber, labelEn, labelZh, basePSF, basePSFLocked, rankDifferential } = req.body;
     const rank = await prisma.rank.update({
       where: { id: req.params.id },
       data: {
-        ...(rankNumber !== undefined && { rankNumber: Number(rankNumber) }),
-        ...(labelEn !== undefined && { labelEn }),
-        ...(labelZh !== undefined && { labelZh }),
-        ...(basePSF !== undefined && { basePSF: Number(basePSF) }),
+        ...(rankNumber       !== undefined && { rankNumber:       Number(rankNumber) }),
+        ...(labelEn          !== undefined && { labelEn }),
+        ...(labelZh          !== undefined && { labelZh }),
+        ...(basePSF          !== undefined && { basePSF:          Number(basePSF) }),
+        ...(basePSFLocked    !== undefined && { basePSFLocked:    Boolean(basePSFLocked) }),
         ...(rankDifferential !== undefined && { rankDifferential: Number(rankDifferential) }),
       },
       include: { floorIncrements: true },

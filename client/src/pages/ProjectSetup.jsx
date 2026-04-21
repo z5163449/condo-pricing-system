@@ -1105,6 +1105,168 @@ function FloorIncrementsTable({ rankId, increments, onAdded, onDeleted }) {
   );
 }
 
+// ─── PricingParametersForm ────────────────────────────────────────────────────
+// Derives targetable bedroom types (only 2BR–5BR are stored in DB) from the
+// stacks currently configured across all blocks.
+const TARGETABLE_BR = ['2BR', '3BR', '4BR', '5BR'];
+const BR_FIELD_MAP  = { '2BR': 'target2BRPSF', '3BR': 'target3BRPSF', '4BR': 'target4BRPSF', '5BR': 'target5BRPSF' };
+
+function PricingParametersForm({ projectId, blocks, initialParams }) {
+  const { t } = useTranslation();
+
+  // Derive which targetable bedroom types exist in current stacks
+  const presentBRTypes = [...new Set(
+    blocks.flatMap(b => (b.stacks || []).map(s => s.bedroomType))
+  )].filter(br => TARGETABLE_BR.includes(br)).sort();
+
+  const makeInitialForm = (p) => ({
+    targetOverallAvgPSF: p?.targetOverallAvgPSF?.toString() ?? '',
+    target2BRPSF:        p?.target2BRPSF?.toString()        ?? '',
+    target3BRPSF:        p?.target3BRPSF?.toString()        ?? '',
+    target4BRPSF:        p?.target4BRPSF?.toString()        ?? '',
+    target5BRPSF:        p?.target5BRPSF?.toString()        ?? '',
+    penthouseMultiplier: p?.penthouseMultiplier?.toString()  ?? '1',
+    roundingUnit:        p?.roundingUnit?.toString()         ?? '100',
+  });
+
+  const [form, setForm]     = useState(makeInitialForm(initialParams));
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState(null); // 'success' | 'error' | null
+
+  // Sync if initialParams changes (e.g., project switched)
+  useEffect(() => {
+    setForm(makeInitialForm(initialParams));
+    setStatus(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, initialParams]);
+
+  function onChange(e) {
+    const { name, value } = e.target;
+    setForm(p => ({ ...p, [name]: value }));
+    setStatus(null);
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    setSaving(true); setStatus(null);
+    try {
+      const body = {
+        targetOverallAvgPSF: form.targetOverallAvgPSF !== '' ? Number(form.targetOverallAvgPSF) : null,
+        target2BRPSF:        form.target2BRPSF        !== '' ? Number(form.target2BRPSF)        : null,
+        target3BRPSF:        form.target3BRPSF        !== '' ? Number(form.target3BRPSF)        : null,
+        target4BRPSF:        form.target4BRPSF        !== '' ? Number(form.target4BRPSF)        : null,
+        target5BRPSF:        form.target5BRPSF        !== '' ? Number(form.target5BRPSF)        : null,
+        penthouseMultiplier: form.penthouseMultiplier !== '' ? Number(form.penthouseMultiplier) : 1,
+        roundingUnit:        form.roundingUnit        !== '' ? Number(form.roundingUnit)        : 100,
+      };
+      const res = await fetch(`/api/projects/${projectId}/pricing-parameters`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      setStatus('success');
+    } catch (err) {
+      setStatus('error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={save} className="card space-y-4">
+      <h2 className="text-base font-semibold text-gray-900">{t('pricingParams.title')}</h2>
+
+      {status === 'success' && (
+        <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
+          {t('common.success')}
+        </div>
+      )}
+      {status === 'error' && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          {t('common.error')}
+        </div>
+      )}
+
+      {/* Overall target */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <label className="label">
+            {t('pricingParams.targetOverallAvgPSF')} <span className="text-red-500">*</span>
+          </label>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">S$</span>
+            <input
+              className="input pl-8"
+              name="targetOverallAvgPSF"
+              type="number" min="0" step="0.01"
+              placeholder="1800"
+              value={form.targetOverallAvgPSF}
+              onChange={onChange}
+              required
+            />
+          </div>
+        </div>
+        <div>
+          <label className="label">{t('pricingParams.penthouseMultiplier')}</label>
+          <input
+            className="input"
+            name="penthouseMultiplier"
+            type="number" min="0" step="0.01"
+            placeholder="1.0"
+            value={form.penthouseMultiplier}
+            onChange={onChange}
+          />
+        </div>
+        <div>
+          <label className="label">{t('pricingParams.roundingUnit')}</label>
+          <input
+            className="input"
+            name="roundingUnit"
+            type="number" min="1"
+            placeholder="100"
+            value={form.roundingUnit}
+            onChange={onChange}
+          />
+        </div>
+      </div>
+
+      {/* Per bedroom type targets */}
+      {presentBRTypes.length > 0 ? (
+        <div>
+          <p className="label mb-2">{t('pricingParams.bedroomTargets')}</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {presentBRTypes.map(br => (
+              <div key={br}>
+                <label className="label text-xs">{t('pricingParams.targetBRPSF', { br })}</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">S$</span>
+                  <input
+                    className="input pl-8 text-xs"
+                    name={BR_FIELD_MAP[br]}
+                    type="number" min="0" step="0.01"
+                    placeholder="—"
+                    value={form[BR_FIELD_MAP[br]]}
+                    onChange={onChange}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-gray-400">{t('pricingParams.noBedroomTargets')}</p>
+      )}
+
+      <div className="pt-2 border-t border-gray-100 flex justify-end">
+        <button type="submit" className="btn-primary" disabled={saving}>
+          {saving ? t('pricingParams.saving') : t('pricingParams.save')}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 // ─── AddRankPanel ─────────────────────────────────────────────────────────────
 function AddRankPanel({ projectId, onSaved, onCancel }) {
   const { t } = useTranslation();
@@ -1186,10 +1348,11 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
   const [expanded, setExpanded]   = useState(false);
   const [editing, setEditing]     = useState(false);
   const [editForm, setEditForm]   = useState({
-    rankNumber: rank.rankNumber.toString(),
-    labelEn:    rank.labelEn,
-    labelZh:    rank.labelZh,
-    basePSF:    rank.basePSF.toString(),
+    rankNumber:   rank.rankNumber.toString(),
+    labelEn:      rank.labelEn,
+    labelZh:      rank.labelZh,
+    basePSF:      rank.basePSF.toString(),
+    basePSFLocked: rank.basePSFLocked ?? false,
   });
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState(null);
@@ -1201,17 +1364,18 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
   useEffect(() => {
     if (!editing) {
       setEditForm({
-        rankNumber: rank.rankNumber.toString(),
-        labelEn:    rank.labelEn,
-        labelZh:    rank.labelZh,
-        basePSF:    rank.basePSF.toString(),
+        rankNumber:    rank.rankNumber.toString(),
+        labelEn:       rank.labelEn,
+        labelZh:       rank.labelZh,
+        basePSF:       rank.basePSF.toString(),
+        basePSFLocked: rank.basePSFLocked ?? false,
       });
     }
   }, [rank, editing]);
 
   function onChange(e) {
-    const { name, value } = e.target;
-    setEditForm(p => ({ ...p, [name]: value }));
+    const { name, value, type, checked } = e.target;
+    setEditForm(p => ({ ...p, [name]: type === 'checkbox' ? checked : value }));
   }
 
   async function saveRank() {
@@ -1221,10 +1385,11 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rankNumber: Number(editForm.rankNumber),
-          labelEn:    editForm.labelEn,
-          labelZh:    editForm.labelZh,
-          basePSF:    Number(editForm.basePSF),
+          rankNumber:    Number(editForm.rankNumber),
+          labelEn:       editForm.labelEn,
+          labelZh:       editForm.labelZh,
+          basePSF:       Number(editForm.basePSF),
+          basePSFLocked: editForm.basePSFLocked,
         }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
@@ -1300,6 +1465,11 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
               <span className="text-xs font-semibold text-brand-600 tabular-nums">
                 S${Number(rank.basePSF).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} psf
               </span>
+              {rank.basePSFLocked && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
+                  🔒 {t('rank.locked')}
+                </span>
+              )}
             </div>
             {bandCount > 0 && (
               <div className="mt-0.5 text-xs text-gray-400">
@@ -1327,6 +1497,16 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
               <label className="label text-xs">{t('rank.basePSF')} <span className="text-red-500">*</span></label>
               <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01"
                 value={editForm.basePSF} onChange={onChange} />
+            </div>
+            <div className="col-span-2 sm:col-span-4 flex items-center gap-2 pt-1">
+              <input
+                id={`lock-${rank.id}`} name="basePSFLocked" type="checkbox"
+                checked={editForm.basePSFLocked} onChange={onChange}
+                className="rounded border-gray-300 text-amber-500 focus:ring-amber-500"
+              />
+              <label htmlFor={`lock-${rank.id}`} className="text-xs text-gray-600 cursor-pointer">
+                {t('rank.lockBasePSF')}
+              </label>
             </div>
           </div>
         )}
@@ -1465,6 +1645,9 @@ export default function ProjectSetup() {
   // Rank management
   const [showAddRank, setShowAddRank] = useState(false);
 
+  // Pricing parameters (loaded with project)
+  const [pricingParams, setPricingParams] = useState(null);
+
   // Unit generation
   const [generating, setGenerating] = useState(false);
   const [toast, setToast]           = useState(null); // { type: 'success'|'error', message }
@@ -1480,7 +1663,7 @@ export default function ProjectSetup() {
   // Load current project
   useEffect(() => {
     if (!projectId) {
-      setProject(null); setBlocks([]); setRanks([]); setForm(INITIAL_PROJECT_FORM);
+      setProject(null); setBlocks([]); setRanks([]); setPricingParams(null); setForm(INITIAL_PROJECT_FORM);
       return;
     }
     setLoading(true);
@@ -1490,6 +1673,7 @@ export default function ProjectSetup() {
         setProject(p);
         setBlocks(p.blocks || []);
         setRanks(p.ranks || []);
+        setPricingParams(p.pricingParameters ?? null);
         setForm({
           nameEn:             p.nameEn,
           nameZh:             p.nameZh,
@@ -1581,7 +1765,10 @@ export default function ProjectSetup() {
       const res = await fetch(`/api/projects/${projectId}/generate-units`, { method: 'POST' });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
       const data = await res.json();
-      setToast({ type: 'success', message: t('generate.success', { count: data.totalUnits }) });
+      const achieved = data.achievedOverallAvgPSF != null
+        ? ` · S$${Math.round(data.achievedOverallAvgPSF).toLocaleString()} avg PSF`
+        : '';
+      setToast({ type: 'success', message: t('generate.success', { count: data.totalUnits }) + achieved });
     } catch (err) {
       setToast({ type: 'error', message: err.message || t('generate.error') });
     } finally {
@@ -1843,6 +2030,15 @@ export default function ProjectSetup() {
               </div>
             )}
           </div>
+        )}
+
+        {/* ── Pricing Parameters section ──────────────────────────────────────── */}
+        {projectId && project && (
+          <PricingParametersForm
+            projectId={projectId}
+            blocks={blocks}
+            initialParams={pricingParams}
+          />
         )}
       </div>
 

@@ -85,6 +85,8 @@
     "labelZh": "标签（中文）",
     "basePSF": "基础单价（新元/平方英尺）",
     "rankDifferential": "档次差价",
+    "lockBasePSF": "锁定基础单价（求解器不会覆盖此档次）",
+    "locked": "已锁定",
     "addRank": "添加档次",
     "editRank": "编辑档次",
     "deleteConfirm": "删除档次「{{label}}」？所有楼层递增设置将被移除。",
@@ -161,6 +163,17 @@
     "success": "已成功生成 {{count}} 个单位",
     "error": "单位生成失败",
     "disabledHint": "请先使单位数量与预期一致"
+  },
+  "pricingParams": {
+    "title": "定价参数",
+    "targetOverallAvgPSF": "目标整体平均单价",
+    "bedroomTargets": "各户型目标单价（可选）",
+    "targetBRPSF": "目标 {{br}} 单价",
+    "penthouseMultiplier": "顶层倍数",
+    "roundingUnit": "取整单位（新元）",
+    "save": "保存参数",
+    "saving": "保存中…",
+    "noBedroomTargets": "楼列中未找到可设置目标的户型（需要 2BR–5BR）"
   },
   "dashboard": {
     "title": "仪表板",

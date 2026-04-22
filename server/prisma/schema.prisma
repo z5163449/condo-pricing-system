@@ -70,7 +70,7 @@ model Rank {
   rankNumber       Int
   labelEn          String
   labelZh          String
-  basePSF          Float
+  basePSF          Float            @default(0)
   basePSFLocked    Boolean          @default(false)
   rankDifferential Float            @default(0)
 
@@ -85,7 +85,7 @@ model FloorIncrement {
   rankId       String
   fromFloor    Int
   toFloor      Int
-  incrementPSF Float
+  incrementPSF Float?
 
   rank         Rank   @relation(fields: [rankId], references: [id], onDelete: Cascade)
 }
@@ -124,6 +124,7 @@ model PricingParameters {
   target3BRPSF          Float?
   target4BRPSF          Float?
   target5BRPSF          Float?
+  targetBedroomPSF      String  @default("{}") // JSON: {"Studio": 1500, "2BR": 1800, "Dual-Key": 2200}
   defaultFloorIncrement Float   @default(10)
   penthouseMultiplier   Float   @default(1.0)
   luckyFloorPremiums    String  @default("{}") // JSON: e.g. {"8": 0.02, "18": 0.03}

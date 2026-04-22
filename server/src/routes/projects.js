@@ -111,20 +111,14 @@ router.put('/:id/pricing-parameters', async (req, res, next) => {
     const { id: projectId } = req.params;
     const {
       targetOverallAvgPSF,
-      target2BRPSF,
-      target3BRPSF,
-      target4BRPSF,
-      target5BRPSF,
+      targetBedroomPSF,
       penthouseMultiplier,
       roundingUnit,
     } = req.body;
 
     const data = {
       ...(targetOverallAvgPSF !== undefined && { targetOverallAvgPSF: targetOverallAvgPSF != null ? Number(targetOverallAvgPSF) : null }),
-      ...(target2BRPSF        !== undefined && { target2BRPSF:        target2BRPSF != null        ? Number(target2BRPSF)        : null }),
-      ...(target3BRPSF        !== undefined && { target3BRPSF:        target3BRPSF != null        ? Number(target3BRPSF)        : null }),
-      ...(target4BRPSF        !== undefined && { target4BRPSF:        target4BRPSF != null        ? Number(target4BRPSF)        : null }),
-      ...(target5BRPSF        !== undefined && { target5BRPSF:        target5BRPSF != null        ? Number(target5BRPSF)        : null }),
+      ...(targetBedroomPSF   !== undefined && { targetBedroomPSF: typeof targetBedroomPSF === 'string' ? targetBedroomPSF : JSON.stringify(targetBedroomPSF) }),
       ...(penthouseMultiplier !== undefined && { penthouseMultiplier: Number(penthouseMultiplier) }),
       ...(roundingUnit        !== undefined && { roundingUnit:        Number(roundingUnit) }),
     };
@@ -243,12 +237,20 @@ router.post('/:id/generate-units', async (req, res, next) => {
 
     // ── Step 3: Apply bedroom type targets ────────────────────────────────────
     if (targetOverallAvgPSF && params) {
-      const brTargetMap = {
-        '2BR': params.target2BRPSF,
-        '3BR': params.target3BRPSF,
-        '4BR': params.target4BRPSF,
-        '5BR': params.target5BRPSF,
-      };
+      // Build bedroom target map from JSON field (supports any bedroom type)
+      let brTargetMap = {};
+      try {
+        const parsed = JSON.parse(params.targetBedroomPSF || '{}');
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v != null && Number(v) > 0) brTargetMap[k] = Number(v);
+        }
+      } catch { /* ignore parse errors */ }
+      // Fall back to legacy fixed fields for backward compatibility
+      if (params.target2BRPSF && !brTargetMap['2BR']) brTargetMap['2BR'] = params.target2BRPSF;
+      if (params.target3BRPSF && !brTargetMap['3BR']) brTargetMap['3BR'] = params.target3BRPSF;
+      if (params.target4BRPSF && !brTargetMap['4BR']) brTargetMap['4BR'] = params.target4BRPSF;
+      if (params.target5BRPSF && !brTargetMap['5BR']) brTargetMap['5BR'] = params.target5BRPSF;
+
       const unlockedRankIds = new Set(project.ranks.filter(r => !r.basePSFLocked).map(r => r.id));
 
       for (const [brType, brTarget] of Object.entries(brTargetMap)) {
@@ -287,12 +289,20 @@ router.post('/:id/generate-units', async (req, res, next) => {
     // Otherwise: increment = (targetRankAvgPSF − basePSF) / (n / 2)
     const solvedIncrements = {};   // rankId → uniform PSF increment per floor, or null for manual bands
 
-    const brTargetMapForIncr = params ? {
-      '2BR': params.target2BRPSF,
-      '3BR': params.target3BRPSF,
-      '4BR': params.target4BRPSF,
-      '5BR': params.target5BRPSF,
-    } : {};
+    // Build bedroom target map for increment calculation (same logic as step 3)
+    const brTargetMapForIncr = {};
+    if (params) {
+      try {
+        const parsed = JSON.parse(params.targetBedroomPSF || '{}');
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v != null && Number(v) > 0) brTargetMapForIncr[k] = Number(v);
+        }
+      } catch { /* ignore */ }
+      if (params.target2BRPSF && !brTargetMapForIncr['2BR']) brTargetMapForIncr['2BR'] = params.target2BRPSF;
+      if (params.target3BRPSF && !brTargetMapForIncr['3BR']) brTargetMapForIncr['3BR'] = params.target3BRPSF;
+      if (params.target4BRPSF && !brTargetMapForIncr['4BR']) brTargetMapForIncr['4BR'] = params.target4BRPSF;
+      if (params.target5BRPSF && !brTargetMapForIncr['5BR']) brTargetMapForIncr['5BR'] = params.target5BRPSF;
+    }
 
     for (const rank of project.ranks) {
       if (rank.floorIncrements.length > 0) {
@@ -431,6 +441,34 @@ router.post('/:id/generate-units', async (req, res, next) => {
       });
     }
 
+    // ── Step 5b: Correction pass — ensure achieved avg PSF is within ±$1 of target ──
+    let correctionWarning = null;
+    if (targetOverallAvgPSF && unitsToCreate.length > 0) {
+      const preAvg = unitsToCreate.reduce((s, u) => s + (u.finalPSF ?? 0), 0) / unitsToCreate.length;
+      if (Math.abs(preAvg - targetOverallAvgPSF) > 1) {
+        const adj = targetOverallAvgPSF - preAvg;
+        for (const u of unitsToCreate) {
+          u.finalPSF = (u.finalPSF ?? 0) + adj;
+          u.finalPrice = roundTo(u.finalPSF * u.sizeSqft, roundingUnit);
+          if (!u.isPenthouse) {
+            u.calculatedPSF   = u.finalPSF;
+            u.calculatedPrice = u.finalPrice;
+          }
+        }
+        // Also update running summary sums
+        for (const br of Object.keys(brFinalPSFSum)) {
+          brFinalPSFSum[br].sum += adj * brFinalPSFSum[br].count;
+        }
+        for (const blk of Object.keys(blockSummary)) {
+          blockSummary[blk].sum += adj * blockSummary[blk].count;
+        }
+        const postAvg = unitsToCreate.reduce((s, u) => s + (u.finalPSF ?? 0), 0) / unitsToCreate.length;
+        if (Math.abs(postAvg - targetOverallAvgPSF) > 1) {
+          correctionWarning = `Cannot reach target PSF within ±$1. Achieved: S$${postAvg.toFixed(0)}, Target: S$${targetOverallAvgPSF.toFixed(0)}`;
+        }
+      }
+    }
+
     await prisma.unit.createMany({ data: unitsToCreate });
 
     // ── Step 6: Build solver summary ──────────────────────────────────────────
@@ -438,20 +476,27 @@ router.post('/:id/generate-units', async (req, res, next) => {
       ? unitsToCreate.reduce((s, u) => s + (u.finalPSF ?? 0), 0) / unitsToCreate.length
       : null;
 
-    const byBedroomType = Object.entries(brFinalPSFSum).map(([type, { sum, count }]) => {
-      const brTargetMap2 = params ? {
-        '2BR': params.target2BRPSF,
-        '3BR': params.target3BRPSF,
-        '4BR': params.target4BRPSF,
-        '5BR': params.target5BRPSF,
-      } : {};
-      return {
-        type,
-        targetPSF:   brTargetMap2[type] ?? null,
-        achievedPSF: count > 0 ? sum / count : null,
-        unitCount:   count,
-      };
-    });
+    // Build bedroom target map for summary reporting
+    const brTargetMapSummary = {};
+    if (params) {
+      try {
+        const parsed = JSON.parse(params.targetBedroomPSF || '{}');
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v != null && Number(v) > 0) brTargetMapSummary[k] = Number(v);
+        }
+      } catch { /* ignore */ }
+      if (params.target2BRPSF && !brTargetMapSummary['2BR']) brTargetMapSummary['2BR'] = params.target2BRPSF;
+      if (params.target3BRPSF && !brTargetMapSummary['3BR']) brTargetMapSummary['3BR'] = params.target3BRPSF;
+      if (params.target4BRPSF && !brTargetMapSummary['4BR']) brTargetMapSummary['4BR'] = params.target4BRPSF;
+      if (params.target5BRPSF && !brTargetMapSummary['5BR']) brTargetMapSummary['5BR'] = params.target5BRPSF;
+    }
+
+    const byBedroomType = Object.entries(brFinalPSFSum).map(([type, { sum, count }]) => ({
+      type,
+      targetPSF:   brTargetMapSummary[type] ?? null,
+      achievedPSF: count > 0 ? sum / count : null,
+      unitCount:   count,
+    }));
 
     const byRank = project.ranks.map(r => ({
       rankLabel:      r.labelEn,
@@ -467,6 +512,7 @@ router.post('/:id/generate-units', async (req, res, next) => {
       byBedroomType,
       byRank,
       byBlock,
+      correctionWarning,
     });
   } catch (err) {
     next(err);

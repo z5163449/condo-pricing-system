@@ -5,7 +5,9 @@
       "Bash(npx prisma *)",
       "Bash(npx vite *)",
       "Bash(node *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(xargs grep *)",
+      "Bash(xargs ls *)"
     ]
   }
 }

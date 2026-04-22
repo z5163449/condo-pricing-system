@@ -33,8 +33,8 @@ function excludedInputToArray(str) {
 function hasOverlap(bands) {
   for (let i = 0; i < bands.length; i++) {
     for (let j = i + 1; j < bands.length; j++) {
-      if (Number(bands[i].fromFloor) <= Number(bands[j].toFloor) &&
-          Number(bands[j].fromFloor) <= Number(bands[i].toFloor)) {
+      if (Number(bands[i].fromFloor) < Number(bands[j].toFloor) &&
+          Number(bands[j].fromFloor) < Number(bands[i].toFloor)) {
         return true;
       }
     }
@@ -966,8 +966,135 @@ function BlockCard({ block, ranks, onUpdate, onDelete }) {
   );
 }
 
+// ─── FloorIncrementRow — display + inline edit ────────────────────────────────
+function FloorIncrementRow({ fi, onUpdated, onDeleted }) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [form, setForm]       = useState({
+    fromFloor:    fi.fromFloor.toString(),
+    toFloor:      fi.toFloor.toString(),
+    incrementPSF: fi.incrementPSF != null ? fi.incrementPSF.toString() : '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError]   = useState(null);
+
+  useEffect(() => {
+    if (!editing) {
+      setForm({
+        fromFloor:    fi.fromFloor.toString(),
+        toFloor:      fi.toFloor.toString(),
+        incrementPSF: fi.incrementPSF != null ? fi.incrementPSF.toString() : '',
+      });
+    }
+  }, [fi, editing]);
+
+  async function save() {
+    setSaving(true); setError(null);
+    try {
+      const res = await fetch(`/api/increments/${fi.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromFloor:    Number(form.fromFloor),
+          toFloor:      Number(form.toFloor),
+          incrementPSF: form.incrementPSF !== '' ? Number(form.incrementPSF) : null,
+        }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const updated = await res.json();
+      onUpdated(updated);
+      setEditing(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(t('floorIncrement.deleteConfirm'))) return;
+    await fetch(`/api/increments/${fi.id}`, { method: 'DELETE' });
+    onDeleted(fi.id);
+  }
+
+  if (editing) {
+    return (
+      <>
+        <tr className="bg-brand-50 border-y border-brand-100">
+          <td className="px-2 py-1.5">
+            <input
+              className="input w-16 text-xs text-center" type="number" min="1"
+              value={form.fromFloor}
+              onChange={e => setForm(p => ({ ...p, fromFloor: e.target.value }))}
+              autoFocus
+            />
+          </td>
+          <td className="px-2 py-1.5">
+            <input
+              className="input w-16 text-xs text-center" type="number" min="1"
+              value={form.toFloor}
+              onChange={e => setForm(p => ({ ...p, toFloor: e.target.value }))}
+            />
+          </td>
+          <td className="px-2 py-1.5">
+            <input
+              className="input w-24 text-xs text-right" type="number" step="0.01"
+              value={form.incrementPSF}
+              onChange={e => setForm(p => ({ ...p, incrementPSF: e.target.value }))}
+            />
+          </td>
+          <td className="px-2 py-1.5">
+            <div className="flex gap-1 justify-end">
+              <button
+                className="btn-primary text-xs px-2 py-1"
+                onClick={save} disabled={saving}
+              >{saving ? '…' : t('common.save')}</button>
+              <button
+                className="btn-secondary text-xs px-2 py-1"
+                onClick={() => { setEditing(false); setError(null); }}
+              >{t('common.cancel')}</button>
+            </div>
+          </td>
+        </tr>
+        {error && (
+          <tr>
+            <td colSpan={4} className="px-3 pb-1 text-xs text-red-600">{error}</td>
+          </tr>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <tr className="hover:bg-gray-50 group">
+      <td className="px-3 py-1.5 tabular-nums">{fi.fromFloor}</td>
+      <td className="px-3 py-1.5 tabular-nums">{fi.toFloor}</td>
+      <td className="px-3 py-1.5 text-right tabular-nums font-medium text-green-700">
+        {fi.incrementPSF != null ? `+${Number(fi.incrementPSF).toFixed(2)}` : <span className="text-gray-400 italic font-normal">—</span>}
+      </td>
+      <td className="px-3 py-1.5 text-right">
+        <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            className="p-1 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+            onClick={() => setEditing(true)} title={t('common.edit')}
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828A2 2 0 0110 16.414H8v-2a2 2 0 01.586-1.414z" />
+            </svg>
+          </button>
+          <button
+            className="text-gray-300 hover:text-red-500 transition-colors px-0.5"
+            onClick={remove}
+          >✕</button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // ─── FloorIncrementsTable ─────────────────────────────────────────────────────
-function FloorIncrementsTable({ rankId, increments, onAdded, onDeleted }) {
+function FloorIncrementsTable({ rankId, increments, onAdded, onUpdated, onDeleted }) {
   const { t } = useTranslation();
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({ fromFloor: '', toFloor: '', incrementPSF: '' });
@@ -985,7 +1112,7 @@ function FloorIncrementsTable({ rankId, increments, onAdded, onDeleted }) {
         body: JSON.stringify({
           fromFloor:    Number(addForm.fromFloor),
           toFloor:      Number(addForm.toFloor),
-          incrementPSF: Number(addForm.incrementPSF),
+          incrementPSF: addForm.incrementPSF !== '' ? Number(addForm.incrementPSF) : null,
         }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
@@ -1000,13 +1127,7 @@ function FloorIncrementsTable({ rankId, increments, onAdded, onDeleted }) {
     }
   }
 
-  async function deleteBand(id) {
-    if (!window.confirm(t('floorIncrement.deleteConfirm'))) return;
-    await fetch(`/api/increments/${id}`, { method: 'DELETE' });
-    onDeleted(id);
-  }
-
-  const canAdd = addForm.fromFloor !== '' && addForm.toFloor !== '' && addForm.incrementPSF !== '';
+  const canAdd = addForm.fromFloor !== '' && addForm.toFloor !== '';
 
   return (
     <div className="border-t border-gray-100">
@@ -1023,7 +1144,7 @@ function FloorIncrementsTable({ rankId, increments, onAdded, onDeleted }) {
               <th className="px-3 py-2 font-medium">{t('floorIncrement.fromFloor')}</th>
               <th className="px-3 py-2 font-medium">{t('floorIncrement.toFloor')}</th>
               <th className="px-3 py-2 font-medium text-right">{t('floorIncrement.incrementPSF')}</th>
-              <th className="px-3 py-2 w-12" />
+              <th className="px-3 py-2 w-16" />
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
@@ -1035,19 +1156,12 @@ function FloorIncrementsTable({ rankId, increments, onAdded, onDeleted }) {
               </tr>
             )}
             {increments.map(fi => (
-              <tr key={fi.id} className="hover:bg-gray-50 group">
-                <td className="px-3 py-1.5 tabular-nums">{fi.fromFloor}</td>
-                <td className="px-3 py-1.5 tabular-nums">{fi.toFloor}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums font-medium text-green-700">
-                  +{Number(fi.incrementPSF).toFixed(2)}
-                </td>
-                <td className="px-3 py-1.5 text-right">
-                  <button
-                    className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => deleteBand(fi.id)}
-                  >✕</button>
-                </td>
-              </tr>
+              <FloorIncrementRow
+                key={fi.id}
+                fi={fi}
+                onUpdated={onUpdated}
+                onDeleted={onDeleted}
+              />
             ))}
             {showAdd && (
               <tr className="bg-brand-50 border-y border-brand-100">
@@ -1106,25 +1220,25 @@ function FloorIncrementsTable({ rankId, increments, onAdded, onDeleted }) {
 }
 
 // ─── PricingParametersForm ────────────────────────────────────────────────────
-// Derives targetable bedroom types (only 2BR–5BR are stored in DB) from the
-// stacks currently configured across all blocks.
-const TARGETABLE_BR = ['2BR', '3BR', '4BR', '5BR'];
-const BR_FIELD_MAP  = { '2BR': 'target2BRPSF', '3BR': 'target3BRPSF', '4BR': 'target4BRPSF', '5BR': 'target5BRPSF' };
-
+// Derives targetable bedroom types dynamically from the stacks in all blocks.
 function PricingParametersForm({ projectId, blocks, initialParams }) {
   const { t } = useTranslation();
 
-  // Derive which targetable bedroom types exist in current stacks
+  // Derive all unique bedroom types present in current stacks
   const presentBRTypes = [...new Set(
     blocks.flatMap(b => (b.stacks || []).map(s => s.bedroomType))
-  )].filter(br => TARGETABLE_BR.includes(br)).sort();
+  )].filter(Boolean).sort();
+
+  function parseBedroomPSF(p) {
+    try {
+      const parsed = JSON.parse(p?.targetBedroomPSF || '{}');
+      return Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, v != null ? v.toString() : '']));
+    } catch { return {}; }
+  }
 
   const makeInitialForm = (p) => ({
     targetOverallAvgPSF: p?.targetOverallAvgPSF?.toString() ?? '',
-    target2BRPSF:        p?.target2BRPSF?.toString()        ?? '',
-    target3BRPSF:        p?.target3BRPSF?.toString()        ?? '',
-    target4BRPSF:        p?.target4BRPSF?.toString()        ?? '',
-    target5BRPSF:        p?.target5BRPSF?.toString()        ?? '',
+    targetBedroomPSF:    parseBedroomPSF(p),
     penthouseMultiplier: p?.penthouseMultiplier?.toString()  ?? '1',
     roundingUnit:        p?.roundingUnit?.toString()         ?? '100',
   });
@@ -1146,16 +1260,23 @@ function PricingParametersForm({ projectId, blocks, initialParams }) {
     setStatus(null);
   }
 
+  function onBedroomPSFChange(brType, value) {
+    setForm(p => ({ ...p, targetBedroomPSF: { ...p.targetBedroomPSF, [brType]: value } }));
+    setStatus(null);
+  }
+
   async function save(e) {
     e.preventDefault();
     setSaving(true); setStatus(null);
     try {
+      // Build targetBedroomPSF JSON — only include non-empty values
+      const bedroomPSFObj = {};
+      for (const [br, val] of Object.entries(form.targetBedroomPSF)) {
+        if (val !== '') bedroomPSFObj[br] = Number(val);
+      }
       const body = {
         targetOverallAvgPSF: form.targetOverallAvgPSF !== '' ? Number(form.targetOverallAvgPSF) : null,
-        target2BRPSF:        form.target2BRPSF        !== '' ? Number(form.target2BRPSF)        : null,
-        target3BRPSF:        form.target3BRPSF        !== '' ? Number(form.target3BRPSF)        : null,
-        target4BRPSF:        form.target4BRPSF        !== '' ? Number(form.target4BRPSF)        : null,
-        target5BRPSF:        form.target5BRPSF        !== '' ? Number(form.target5BRPSF)        : null,
+        targetBedroomPSF:    JSON.stringify(bedroomPSFObj),
         penthouseMultiplier: form.penthouseMultiplier !== '' ? Number(form.penthouseMultiplier) : 1,
         roundingUnit:        form.roundingUnit        !== '' ? Number(form.roundingUnit)        : 100,
       };
@@ -1231,7 +1352,7 @@ function PricingParametersForm({ projectId, blocks, initialParams }) {
         </div>
       </div>
 
-      {/* Per bedroom type targets */}
+      {/* Per bedroom type targets — derived dynamically from stacks */}
       {presentBRTypes.length > 0 ? (
         <div>
           <p className="label mb-2">{t('pricingParams.bedroomTargets')}</p>
@@ -1243,11 +1364,10 @@ function PricingParametersForm({ projectId, blocks, initialParams }) {
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">S$</span>
                   <input
                     className="input pl-8 text-xs"
-                    name={BR_FIELD_MAP[br]}
                     type="number" min="0" step="0.01"
                     placeholder="—"
-                    value={form[BR_FIELD_MAP[br]]}
-                    onChange={onChange}
+                    value={form.targetBedroomPSF[br] ?? ''}
+                    onChange={e => onBedroomPSFChange(br, e.target.value)}
                   />
                 </div>
               </div>
@@ -1282,16 +1402,17 @@ function AddRankPanel({ projectId, onSaved, onCancel }) {
   async function save() {
     setSaving(true); setError(null);
     try {
+      const body = {
+        projectId,
+        rankNumber: form.rankNumber ? Number(form.rankNumber) : 1,
+        labelEn:    form.labelEn.trim(),
+        labelZh:    form.labelZh.trim(),
+      };
+      if (form.basePSF !== '') body.basePSF = Number(form.basePSF);
       const res = await fetch('/api/ranks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId,
-          rankNumber: form.rankNumber ? Number(form.rankNumber) : 1,
-          labelEn:    form.labelEn.trim(),
-          labelZh:    form.labelZh.trim(),
-          basePSF:    Number(form.basePSF),
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
       const created = await res.json();
@@ -1304,7 +1425,7 @@ function AddRankPanel({ projectId, onSaved, onCancel }) {
     }
   }
 
-  const canSave = form.labelEn.trim() && form.labelZh.trim() && form.basePSF !== '';
+  const canSave = form.labelEn.trim() && form.labelZh.trim();
 
   return (
     <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
@@ -1327,8 +1448,8 @@ function AddRankPanel({ projectId, onSaved, onCancel }) {
             value={form.labelZh} onChange={onChange} />
         </div>
         <div>
-          <label className="label text-xs">{t('rank.basePSF')} <span className="text-red-500">*</span></label>
-          <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01" placeholder="1500"
+          <label className="label text-xs">{t('rank.basePSF')}</label>
+          <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01" placeholder="auto"
             value={form.basePSF} onChange={onChange} />
         </div>
       </div>
@@ -1351,7 +1472,7 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
     rankNumber:   rank.rankNumber.toString(),
     labelEn:      rank.labelEn,
     labelZh:      rank.labelZh,
-    basePSF:      rank.basePSF.toString(),
+    basePSF:      rank.basePSF != null && rank.basePSF !== 0 ? rank.basePSF.toString() : '',
     basePSFLocked: rank.basePSFLocked ?? false,
   });
   const [saving, setSaving]       = useState(false);
@@ -1367,7 +1488,7 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
         rankNumber:    rank.rankNumber.toString(),
         labelEn:       rank.labelEn,
         labelZh:       rank.labelZh,
-        basePSF:       rank.basePSF.toString(),
+        basePSF:       rank.basePSF != null && rank.basePSF !== 0 ? rank.basePSF.toString() : '',
         basePSFLocked: rank.basePSFLocked ?? false,
       });
     }
@@ -1381,16 +1502,18 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
   async function saveRank() {
     setSaving(true); setError(null);
     try {
+      const body = {
+        rankNumber:    Number(editForm.rankNumber),
+        labelEn:       editForm.labelEn,
+        labelZh:       editForm.labelZh,
+        basePSFLocked: editForm.basePSFLocked,
+      };
+      if (editForm.basePSF !== '') body.basePSF = Number(editForm.basePSF);
+      else body.basePSF = 0;
       const res = await fetch(`/api/ranks/${rank.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rankNumber:    Number(editForm.rankNumber),
-          labelEn:       editForm.labelEn,
-          labelZh:       editForm.labelZh,
-          basePSF:       Number(editForm.basePSF),
-          basePSFLocked: editForm.basePSFLocked,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
       const updated = await res.json();
@@ -1445,6 +1568,12 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
     onUpdate({ ...rank, floorIncrements: sorted });
   }
 
+  function handleIncrementUpdated(fi) {
+    const updated = (rank.floorIncrements || []).map(f => f.id === fi.id ? fi : f)
+      .sort((a, b) => a.fromFloor - b.fromFloor);
+    onUpdate({ ...rank, floorIncrements: updated });
+  }
+
   function handleIncrementDeleted(fiId) {
     onUpdate({ ...rank, floorIncrements: (rank.floorIncrements || []).filter(fi => fi.id !== fiId) });
   }
@@ -1462,9 +1591,13 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
               <span className="text-xs font-mono text-gray-400 tabular-nums">#{rank.rankNumber}</span>
               <span className="font-semibold text-gray-900 text-sm">{rank.labelEn}</span>
               <span className="text-xs text-gray-500">{rank.labelZh}</span>
-              <span className="text-xs font-semibold text-brand-600 tabular-nums">
-                S${Number(rank.basePSF).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} psf
-              </span>
+              {rank.basePSF != null && rank.basePSF > 0 ? (
+                <span className="text-xs font-semibold text-brand-600 tabular-nums">
+                  S${Number(rank.basePSF).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} psf
+                </span>
+              ) : (
+                <span className="text-xs text-gray-400 italic">auto</span>
+              )}
               {rank.basePSFLocked && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
                   🔒 {t('rank.locked')}
@@ -1494,8 +1627,8 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
               <input className="input text-xs" name="labelZh" value={editForm.labelZh} onChange={onChange} />
             </div>
             <div>
-              <label className="label text-xs">{t('rank.basePSF')} <span className="text-red-500">*</span></label>
-              <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01"
+              <label className="label text-xs">{t('rank.basePSF')}</label>
+              <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01" placeholder="auto"
                 value={editForm.basePSF} onChange={onChange} />
             </div>
             <div className="col-span-2 sm:col-span-4 flex items-center gap-2 pt-1">
@@ -1517,7 +1650,7 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
             <>
               <button
                 className="btn-primary text-xs px-2 py-1"
-                onClick={saveRank} disabled={saving || !editForm.labelEn || !editForm.basePSF}
+                onClick={saveRank} disabled={saving || !editForm.labelEn}
               >{saving ? '…' : t('common.save')}</button>
               <button
                 className="btn-secondary text-xs px-2 py-1"
@@ -1543,7 +1676,7 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
                     ? 'text-indigo-600 bg-indigo-50'
                     : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
                 }`}
-                onClick={() => { setDuplicating(v => !v); setDupBasePSF(rank.basePSF.toString()); setDupError(null); }}
+                onClick={() => { setDuplicating(v => !v); setDupBasePSF(rank.basePSF != null && rank.basePSF !== 0 ? rank.basePSF.toString() : ''); setDupError(null); }}
                 title={t('rank.duplicate')}
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1614,6 +1747,7 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
           rankId={rank.id}
           increments={rank.floorIncrements || []}
           onAdded={handleIncrementAdded}
+          onUpdated={handleIncrementUpdated}
           onDeleted={handleIncrementDeleted}
         />
       )}
@@ -1768,7 +1902,9 @@ export default function ProjectSetup() {
       const achieved = data.achievedOverallAvgPSF != null
         ? ` · S$${Math.round(data.achievedOverallAvgPSF).toLocaleString()} avg PSF`
         : '';
-      setToast({ type: 'success', message: t('generate.success', { count: data.totalUnits }) + achieved });
+      let message = t('generate.success', { count: data.totalUnits }) + achieved;
+      if (data.correctionWarning) message += ` ⚠ ${data.correctionWarning}`;
+      setToast({ type: data.correctionWarning ? 'error' : 'success', message });
     } catch (err) {
       setToast({ type: 'error', message: err.message || t('generate.error') });
     } finally {

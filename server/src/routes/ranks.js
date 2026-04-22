@@ -36,8 +36,8 @@ router.get('/:id', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const { projectId, rankNumber, labelEn, labelZh, basePSF, basePSFLocked, rankDifferential, floorIncrements } = req.body;
-    if (!projectId || !labelEn || !labelZh || basePSF === undefined) {
-      return res.status(400).json({ error: 'projectId, labelEn, labelZh, and basePSF are required' });
+    if (!projectId || !labelEn || !labelZh) {
+      return res.status(400).json({ error: 'projectId, labelEn, and labelZh are required' });
     }
     const rank = await prisma.rank.create({
       data: {
@@ -45,14 +45,14 @@ router.post('/', async (req, res, next) => {
         rankNumber: rankNumber ?? 1,
         labelEn,
         labelZh,
-        basePSF:          Number(basePSF),
+        basePSF:          basePSF !== undefined && basePSF !== '' ? Number(basePSF) : 0,
         basePSFLocked:    basePSFLocked ?? false,
         rankDifferential: rankDifferential ? Number(rankDifferential) : 0,
         floorIncrements: floorIncrements
           ? { create: floorIncrements.map(fi => ({
-              fromFloor: Number(fi.fromFloor),
-              toFloor: Number(fi.toFloor),
-              incrementPSF: Number(fi.incrementPSF),
+              fromFloor:    Number(fi.fromFloor),
+              toFloor:      Number(fi.toFloor),
+              incrementPSF: fi.incrementPSF != null && fi.incrementPSF !== '' ? Number(fi.incrementPSF) : null,
             })) }
           : undefined,
       },
@@ -103,15 +103,15 @@ router.post('/:rankId/increments', async (req, res, next) => {
   try {
     const { rankId } = req.params;
     const { fromFloor, toFloor, incrementPSF } = req.body;
-    if (fromFloor === undefined || toFloor === undefined || incrementPSF === undefined) {
-      return res.status(400).json({ error: 'fromFloor, toFloor, and incrementPSF are required' });
+    if (fromFloor === undefined || toFloor === undefined) {
+      return res.status(400).json({ error: 'fromFloor and toFloor are required' });
     }
     const increment = await prisma.floorIncrement.create({
       data: {
         rankId,
         fromFloor:    Number(fromFloor),
         toFloor:      Number(toFloor),
-        incrementPSF: Number(incrementPSF),
+        incrementPSF: incrementPSF !== undefined && incrementPSF !== null && incrementPSF !== '' ? Number(incrementPSF) : null,
       },
     });
     res.status(201).json(increment);

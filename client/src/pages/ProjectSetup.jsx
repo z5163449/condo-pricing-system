@@ -1496,7 +1496,12 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
 
   function onChange(e) {
     const { name, value, type, checked } = e.target;
-    setEditForm(p => ({ ...p, [name]: type === 'checkbox' ? checked : value }));
+    setEditForm(p => {
+      const next = { ...p, [name]: type === 'checkbox' ? checked : value };
+      // auto-uncheck lock whenever basePSF is cleared or set to zero
+      if (name === 'basePSF' && !(Number(value) > 0)) next.basePSFLocked = false;
+      return next;
+    });
   }
 
   async function saveRank() {
@@ -1506,7 +1511,7 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
         rankNumber:    Number(editForm.rankNumber),
         labelEn:       editForm.labelEn,
         labelZh:       editForm.labelZh,
-        basePSFLocked: editForm.basePSFLocked,
+        basePSFLocked: editForm.basePSFLocked && Number(editForm.basePSF) > 0,
       };
       if (editForm.basePSF !== '') body.basePSF = Number(editForm.basePSF);
       else body.basePSF = 0;
@@ -1598,7 +1603,7 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
               ) : (
                 <span className="text-xs text-gray-400 italic">auto</span>
               )}
-              {rank.basePSFLocked && (
+              {rank.basePSFLocked && rank.basePSF > 0 && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
                   🔒 {t('rank.locked')}
                 </span>
@@ -1634,10 +1639,12 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
             <div className="col-span-2 sm:col-span-4 flex items-center gap-2 pt-1">
               <input
                 id={`lock-${rank.id}`} name="basePSFLocked" type="checkbox"
-                checked={editForm.basePSFLocked} onChange={onChange}
-                className="rounded border-gray-300 text-amber-500 focus:ring-amber-500"
+                checked={editForm.basePSFLocked && Number(editForm.basePSF) > 0}
+                onChange={onChange}
+                disabled={!(Number(editForm.basePSF) > 0)}
+                className="rounded border-gray-300 text-amber-500 focus:ring-amber-500 disabled:opacity-40 disabled:cursor-not-allowed"
               />
-              <label htmlFor={`lock-${rank.id}`} className="text-xs text-gray-600 cursor-pointer">
+              <label htmlFor={`lock-${rank.id}`} className={`text-xs cursor-pointer ${Number(editForm.basePSF) > 0 ? 'text-gray-600' : 'text-gray-400'}`}>
                 {t('rank.lockBasePSF')}
               </label>
             </div>

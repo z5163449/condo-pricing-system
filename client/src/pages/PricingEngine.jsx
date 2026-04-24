@@ -47,7 +47,7 @@ function fmtPrice(v) {
 function computeStats(units) {
   const valid = units.filter(u => u.finalPSF != null && u.finalPrice != null);
   if (!valid.length) return { count: 0, avgPSF: null, highPrice: null, lowPrice: null };
-  const avgPSF    = valid.reduce((s, u) => s + u.finalPSF, 0) / valid.length;
+  const avgPSF    = valid.reduce((s, u) => s + u.finalPrice, 0) / valid.reduce((s,u) => s + u.sizeSqft, 0);
   const highPrice = Math.max(...valid.map(u => u.finalPrice));
   const lowPrice  = Math.min(...valid.map(u => u.finalPrice));
   return { count: valid.length, avgPSF, highPrice, lowPrice };
@@ -169,7 +169,7 @@ function BlockPricingTable({ block }) {
               }}
               onClick={() => setShowFloorAvg(v => !v)}
             >
-              {showFloorAvg ? t('pricing.hideFloorAvg') : t('pricing.showFloorAvg')}
+              {showFloorAvg ? t('Hide Floor Average') : t('Show Floor Average')}
             </button>
           </div>
 

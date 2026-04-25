@@ -250,10 +250,6 @@ router.post('/:id/generate-units', async (req, res, next) => {
           if (v != null && Number(v) > 0) brTargetMap[k] = Number(v);
         }
       } catch { /* ignore */ }
-      if (params.target2BRPSF && !brTargetMap['2BR']) brTargetMap['2BR'] = params.target2BRPSF;
-      if (params.target3BRPSF && !brTargetMap['3BR']) brTargetMap['3BR'] = params.target3BRPSF;
-      if (params.target4BRPSF && !brTargetMap['4BR']) brTargetMap['4BR'] = params.target4BRPSF;
-      if (params.target5BRPSF && !brTargetMap['5BR']) brTargetMap['5BR'] = params.target5BRPSF;
     }
 
     // ── Step 2: Target avg PSF per rank ──────────────────────────────────────
@@ -506,10 +502,6 @@ router.post('/:id/generate-units', async (req, res, next) => {
           if (v != null && Number(v) > 0) brTargetMapSummary[k] = Number(v);
         }
       } catch { /* ignore */ }
-      if (params.target2BRPSF && !brTargetMapSummary['2BR']) brTargetMapSummary['2BR'] = params.target2BRPSF;
-      if (params.target3BRPSF && !brTargetMapSummary['3BR']) brTargetMapSummary['3BR'] = params.target3BRPSF;
-      if (params.target4BRPSF && !brTargetMapSummary['4BR']) brTargetMapSummary['4BR'] = params.target4BRPSF;
-      if (params.target5BRPSF && !brTargetMapSummary['5BR']) brTargetMapSummary['5BR'] = params.target5BRPSF;
     }
 
     const byBedroomType = Object.entries(brFinalPSFSum).map(([type, { sum, count }]) => ({
@@ -592,10 +584,6 @@ router.patch('/:id/recalculate-above', async (req, res, next) => {
           if (v != null && Number(v) > 0) brTargetMap[k] = Number(v);
         }
       } catch { /* ignore */ }
-      if (params.target2BRPSF && !brTargetMap['2BR']) brTargetMap['2BR'] = params.target2BRPSF;
-      if (params.target3BRPSF && !brTargetMap['3BR']) brTargetMap['3BR'] = params.target3BRPSF;
-      if (params.target4BRPSF && !brTargetMap['4BR']) brTargetMap['4BR'] = params.target4BRPSF;
-      if (params.target5BRPSF && !brTargetMap['5BR']) brTargetMap['5BR'] = params.target5BRPSF;
     }
 
     function parseExclR(str) {

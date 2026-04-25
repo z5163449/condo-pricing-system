@@ -57,6 +57,10 @@ model Stack {
   penthouseSizeSqft    Float?   // size of penthouse unit (sqft), shown when hasPenthouse = true
   stackStartingFloor   Int?     // overrides block startingFloor for this stack if set
   stackExcludedFloors  String?  // JSON array of additional excluded floors (union with block excludedFloors)
+  stackStartingPSF     Float?   // locked starting PSF for lowest valid floor of this stack
+  stackStartingPSFLocked Boolean @default(false)
+  stackIncrements      String?  // JSON array of increment bands — overrides rank bands for this stack
+  stackIncrementsLocked Boolean  @default(false)
 
   block             Block    @relation(fields: [blockId], references: [id], onDelete: Cascade)
   rank             Rank?    @relation(fields: [rankId], references: [id])
@@ -70,9 +74,7 @@ model Rank {
   rankNumber       Int
   labelEn          String
   labelZh          String
-  basePSF          Float            @default(0)
-  basePSFLocked    Boolean          @default(false)
-  rankDifferential Float            @default(0)
+  rankDifferential Float?
 
   project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   stacks           Stack[]
@@ -120,15 +122,13 @@ model PricingParameters {
   id                    String  @id @default(cuid())
   projectId             String  @unique
   targetOverallAvgPSF   Float?
-  target2BRPSF          Float?
-  target3BRPSF          Float?
-  target4BRPSF          Float?
-  target5BRPSF          Float?
   targetBedroomPSF      String  @default("{}") // JSON: {"Studio": 1500, "2BR": 1800, "Dual-Key": 2200}
   defaultFloorIncrement Float   @default(10)
   penthouseMultiplier   Float   @default(1.0)
   luckyFloorPremiums    String  @default("{}") // JSON: e.g. {"8": 0.02, "18": 0.03}
   roundingUnit          Int     @default(100)
+  typeCodeHierarchy     String? // JSON array of type codes ordered highest PSF to lowest, e.g. ["B2","B2a","C1"]
+  rankReference         String? // rankId of the reference rank (differential = 0) used for relative pricing
 
   project               Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }

@@ -275,22 +275,20 @@ router.post('/:id/generate-units', async (req, res, next) => {
       targetRankAvgPSFs[rank.id] = targetRankAvgPSF;
     }
 
-    // ── Step 3: Solve band-scale k (basePSF is always rank.basePSF) ─────────
-    // Band ranks: k = (targetAvg − basePSF) / avgCumContrib at k=1.
-    //   Avg PSF = basePSF + k × avgCumContrib  →  k = (target − basePSF) / avgCumContrib
-    // No-band ranks (backward-compat fallback):
-    //   increment = (target − basePSF) / ((n−1)/2)
-    const solvedBasePSFs   = {};  // rankId → basePSF (floor-1 anchor, always rank.basePSF)
-    const solvedIncrements = {};  // rankId → uniform increment per floor, or null (bands)
-    const solvedBandScales = {};  // rankId → scale factor k applied to band incrementPSFs
+    // ── Step 3: Solve startingPSF per rank ──────────────────────────────────
+    // startingPSF is the PSF at the lowest valid floor such that the arithmetic
+    // mean of (startingPSF + cumulative band offsets) across all valid floors
+    // equals the rank's target avg PSF.
+    //   startingPSF = target − avgCumulativeOffset
+    // avgCumulativeOffset = mean of per-floor cumulative increments (floor[0] = 0)
+    // across every stack in the rank.
+    const solvedStartingPSFs = {};  // rankId → PSF at floor-0 of each stack
 
     for (const rank of project.ranks) {
-      const target  = targetRankAvgPSFs[rank.id];
-      const basePSF = rank.basePSF > 0 ? rank.basePSF : (target ?? 0);
+      const target = targetRankAvgPSFs[rank.id] ?? 0;
 
       if (rank.floorIncrements.length > 0) {
-        // Simulate cumulative band contributions at k=1 across all stacks of this rank
-        let cumContribSum = 0, simUnitCount = 0;
+        let totalOffsetSum = 0, totalUnitCount = 0;
         for (const block of project.blocks) {
           const blockExcl = parseExcl(block.excludedFloors);
           const maxFloor  = block.startingFloor + block.totalStoreys - 1;
@@ -303,28 +301,22 @@ router.post('/:id/generate-units', async (req, res, next) => {
             for (let f = start; f <= maxFloor; f++) {
               if (!combined.has(f)) validFloors.push(f);
             }
-            let cumIncr = 0;
+            let cumOffset = 0;
             for (let idx = 0; idx < validFloors.length; idx++) {
-              const floor = validFloors[idx];
               if (idx > 0) {
-                cumIncr += getBandIncrement(rank.floorIncrements, floor);
+                cumOffset += getBandIncrement(rank.floorIncrements, validFloors[idx]);
               }
-              cumContribSum += cumIncr;
-              simUnitCount++;
+              totalOffsetSum += cumOffset;
+              totalUnitCount++;
             }
           }
         }
-        const avgCumContrib = simUnitCount > 0 ? cumContribSum / simUnitCount : 0;
-        solvedBasePSFs[rank.id]   = basePSF;
-        solvedBandScales[rank.id] = avgCumContrib > 0 ? (target - basePSF) / avgCumContrib : 0;
-        solvedIncrements[rank.id] = null;
-        continue;
+        const avgOffset = totalUnitCount > 0 ? totalOffsetSum / totalUnitCount : 0;
+        solvedStartingPSFs[rank.id] = target - avgOffset;
+      } else {
+        // No bands — all floors get the same PSF = target
+        solvedStartingPSFs[rank.id] = target;
       }
-
-      // No bands — backward-compat: solve uniform increment from fixed basePSF
-      const n = rankUnitCounts[rank.id] || 0;
-      solvedBasePSFs[rank.id]   = basePSF;
-      solvedIncrements[rank.id] = n > 1 ? (target - basePSF) / ((n - 1) / 2) : 0;
     }
 
     // ── Step 5: Preserve manual overrides, delete generated units ────────────
@@ -367,12 +359,13 @@ router.post('/:id/generate-units', async (req, res, next) => {
 
         const rank        = stack.rank;
         const rankId      = stack.rankId;
-        const basePSF     = rankId ? (solvedBasePSFs[rankId] ?? 0) : 0;
-        const useManual   = rankId && solvedIncrements[rankId] === null;
-        const uniformIncr = rankId ? (solvedIncrements[rankId] ?? 0) : 0;
         const increments  = rank?.floorIncrements ?? [];
-        const bandScale   = rankId ? (solvedBandScales[rankId] ?? 1.0) : 1.0;
         const stackNumStr = stack.stackNumber.toString().padStart(2, '0');
+
+        const solvedStart = rankId ? (solvedStartingPSFs[rankId] ?? 0) : 0;
+        const startingPSF = stack.stackStartingPSFLocked && stack.stackStartingPSF != null
+          ? stack.stackStartingPSF
+          : solvedStart;
 
         let prevCalcPSF   = null;
         let prevCalcPrice = null;
@@ -382,15 +375,9 @@ router.post('/:id/generate-units', async (req, res, next) => {
           const isTop       = idx === validFloors.length - 1;
           const isPenthouse = isTop && stack.hasPenthouse && (stack.penthouseSizeSqft ?? 0) > 0;
 
-          // Per-floor increment — apply band scale factor k to manual bands
-          let incrPSF;
-          if (useManual) {
-            incrPSF = getBandIncrement(increments, floor) * bandScale;
-          } else {
-            incrPSF = uniformIncr;
-          }
-
-          const calcPSF   = prevCalcPSF === null ? basePSF : prevCalcPSF + incrPSF;
+          const calcPSF   = prevCalcPSF === null
+            ? startingPSF
+            : prevCalcPSF + getBandIncrement(increments, floor);
           const calcPrice = roundTo(calcPSF * stack.standardSizeSqft, roundingUnit);
 
           // If this floor has a manual override, preserve it and keep the chain going
@@ -405,8 +392,8 @@ router.post('/:id/generate-units', async (req, res, next) => {
             if (!blockSummary[block.blockName]) blockSummary[block.blockName] = { sum: 0, count: 0 };
             blockSummary[block.blockName].sum   += existingManual.finalPSF ?? 0;
             blockSummary[block.blockName].count += 1;
-            prevCalcPSF   = calcPSF;
-            prevCalcPrice = calcPrice;
+            prevCalcPSF   = existingManual.finalPSF ?? calcPSF;
+            prevCalcPrice = existingManual.finalPrice ?? calcPrice;
             blockUnitCount++;
             continue;
           }
@@ -418,7 +405,7 @@ router.post('/:id/generate-units', async (req, res, next) => {
           if (isPenthouse) {
             sizeSqft = stack.penthouseSizeSqft;
             const priceBelow = prevCalcPrice ?? calcPrice;
-            const premium    = basePSF * penthouseMult * ((stack.penthouseSizeSqft ?? 0) - stack.standardSizeSqft);
+            const premium    = startingPSF * penthouseMult * ((stack.penthouseSizeSqft ?? 0) - stack.standardSizeSqft);
             finalPrice = roundTo(priceBelow + premium, roundingUnit);
             finalPSF   = sizeSqft > 0 ? finalPrice / sizeSqft : 0;
           } else {
@@ -468,18 +455,49 @@ router.post('/:id/generate-units', async (req, res, next) => {
       });
     }
 
-    // ── Per-rank target accuracy check ───────────────────────────────────────
-    const rankWarnings = [];
-    for (const rank of project.ranks) {
-      const rv     = rankRevenue[rank.id];
-      const target = targetRankAvgPSFs[rank.id];
-      if (!rv || rv.sqft === 0 || !target) continue;
-      const achieved = rv.revenue / rv.sqft;
-      if (Math.abs(achieved - target) > 1) {
-        rankWarnings.push(`${rank.labelEn}: target S$${Math.round(target)}, achieved S$${Math.round(achieved)}`);
+    // ── Step 7: Correction pass ───────────────────────────────────────────────
+    // Iteratively shift all non-locked, non-manual units by (target − achieved)
+    // until the overall sqft-weighted avg PSF is within ±$1 of the target.
+    const lockedStackIds = new Set(
+      project.blocks.flatMap(b =>
+        b.stacks.filter(s => s.stackStartingPSFLocked).map(s => s.id)
+      )
+    );
+
+    let correctionWarning = null;
+    const MAX_ITERATIONS  = 20;
+    let iteration = 0;
+
+    while (iteration < MAX_ITERATIONS) {
+      const nonManual    = unitsToCreate.filter(u => !u.isManualOverride);
+      const totalRevenue = nonManual.reduce((sum, u) => sum + u.finalPrice, 0);
+      const totalSqft    = nonManual.reduce((sum, u) => sum + u.sizeSqft, 0);
+      if (totalSqft === 0) break;
+      const achievedAvg = totalRevenue / totalSqft;
+
+      const diff = targetOverallAvgPSF - achievedAvg;
+      if (Math.abs(diff) <= 1) break;
+
+      for (const unit of unitsToCreate) {
+        if (unit.isManualOverride || lockedStackIds.has(unit.stackId)) continue;
+        const newPrice  = Math.round((unit.finalPSF + diff) * unit.sizeSqft / roundingUnit) * roundingUnit;
+        unit.finalPrice = newPrice;
+        unit.finalPSF   = newPrice / unit.sizeSqft;
+      }
+
+      iteration++;
+    }
+
+    {
+      const nonManual     = unitsToCreate.filter(u => !u.isManualOverride);
+      const totalSqft     = nonManual.reduce((s, u) => s + u.sizeSqft, 0);
+      const finalAchieved = totalSqft > 0
+        ? nonManual.reduce((s, u) => s + u.finalPrice, 0) / totalSqft
+        : 0;
+      if (totalSqft > 0 && Math.abs(finalAchieved - targetOverallAvgPSF) > 1) {
+        correctionWarning = `Cannot reach target within ±$1. Achieved: $${Math.round(finalAchieved)}, Target: $${targetOverallAvgPSF}`;
       }
     }
-    const correctionWarning = rankWarnings.length > 0 ? rankWarnings.join(' | ') : null;
 
     // Skip manual override units (already in DB), strip temp field
     await prisma.unit.createMany({
@@ -512,11 +530,9 @@ router.post('/:id/generate-units', async (req, res, next) => {
     }));
 
     const byRank = project.ranks.map(r => ({
-      rankLabel:       r.labelEn,
-      solvedBasePSF:   solvedBasePSFs[r.id] ?? r.basePSF,
-      solvedIncrement: solvedIncrements[r.id] ?? null,
-      bandScale:       solvedBandScales[r.id] ?? null,
-      unitCount:       rankUnitCounts[r.id] || 0,
+      rankLabel:   r.labelEn,
+      startingPSF: solvedStartingPSFs[r.id] ?? null,
+      unitCount:   rankUnitCounts[r.id] || 0,
     }));
 
     res.json({
@@ -626,7 +642,7 @@ router.patch('/:id/recalculate-above', async (req, res, next) => {
       }
     }
 
-    const basePSF = rank.basePSF > 0 ? rank.basePSF : (targetRankAvgPSF ?? 0);
+    const basePSF = targetRankAvgPSF ?? 0;
 
     // Compute avgCumContrib at k=1 for this rank
     let cumContribSum = 0, simUnitCount = 0;

@@ -1390,7 +1390,7 @@ function PricingParametersForm({ projectId, blocks, initialParams }) {
 // ─── AddRankPanel ─────────────────────────────────────────────────────────────
 function AddRankPanel({ projectId, onSaved, onCancel }) {
   const { t } = useTranslation();
-  const [form, setForm]     = useState({ rankNumber: '', labelEn: '', labelZh: '', basePSF: '' });
+  const [form, setForm]     = useState({ rankNumber: '', labelEn: '', labelZh: '', rankDifferential: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState(null);
 
@@ -1407,8 +1407,8 @@ function AddRankPanel({ projectId, onSaved, onCancel }) {
         rankNumber: form.rankNumber ? Number(form.rankNumber) : 1,
         labelEn:    form.labelEn.trim(),
         labelZh:    form.labelZh.trim(),
+        rankDifferential: form.rankDifferential !== '' ? Number(form.rankDifferential) : null,
       };
-      if (form.basePSF !== '') body.basePSF = Number(form.basePSF);
       const res = await fetch('/api/ranks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1448,9 +1448,10 @@ function AddRankPanel({ projectId, onSaved, onCancel }) {
             value={form.labelZh} onChange={onChange} />
         </div>
         <div>
-          <label className="label text-xs">{t('rank.basePSF')}</label>
-          <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01" placeholder="auto"
-            value={form.basePSF} onChange={onChange} />
+          <label className="label text-xs">{t('rank.rankDifferential')}</label>
+          <input className="input text-xs" name="rankDifferential" type="number" step="0.01" placeholder="0"
+            value={form.rankDifferential} onChange={onChange} />
+          <p className="text-xs text-gray-400 mt-0.5">{t('rank.rankDifferentialHint')}</p>
         </div>
       </div>
       <div className="flex gap-2 justify-end pt-1 border-t border-gray-200">
@@ -1469,27 +1470,24 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
   const [expanded, setExpanded]   = useState(false);
   const [editing, setEditing]     = useState(false);
   const [editForm, setEditForm]   = useState({
-    rankNumber:   rank.rankNumber.toString(),
-    labelEn:      rank.labelEn,
-    labelZh:      rank.labelZh,
-    basePSF:      rank.basePSF != null && rank.basePSF !== 0 ? rank.basePSF.toString() : '',
-    basePSFLocked: rank.basePSFLocked ?? false,
+    rankNumber:       rank.rankNumber.toString(),
+    labelEn:          rank.labelEn,
+    labelZh:          rank.labelZh,
+    rankDifferential: rank.rankDifferential != null ? rank.rankDifferential.toString() : '',
   });
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState(null);
   const [duplicating, setDuplicating] = useState(false);
-  const [dupBasePSF, setDupBasePSF]   = useState('');
   const [dupSaving, setDupSaving]     = useState(false);
   const [dupError, setDupError]       = useState(null);
 
   useEffect(() => {
     if (!editing) {
       setEditForm({
-        rankNumber:    rank.rankNumber.toString(),
-        labelEn:       rank.labelEn,
-        labelZh:       rank.labelZh,
-        basePSF:       rank.basePSF != null && rank.basePSF !== 0 ? rank.basePSF.toString() : '',
-        basePSFLocked: rank.basePSFLocked ?? false,
+        rankNumber:       rank.rankNumber.toString(),
+        labelEn:          rank.labelEn,
+        labelZh:          rank.labelZh,
+        rankDifferential: rank.rankDifferential != null ? rank.rankDifferential.toString() : '',
       });
     }
   }, [rank, editing]);
@@ -1515,12 +1513,8 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
   const bandCount      = rank.floorIncrements?.length ?? 0;
 
   function onChange(e) {
-    const { name, value, type, checked } = e.target;
-    setEditForm(p => {
-      const next = { ...p, [name]: type === 'checkbox' ? checked : value };
-      if (name === 'basePSF' && !(Number(value) > 0)) next.basePSFLocked = false;
-      return next;
-    });
+    const { name, value } = e.target;
+    setEditForm(p => ({ ...p, [name]: value }));
   }
 
   async function saveRank() {
@@ -1537,13 +1531,11 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
     setSaving(true); setError(null);
     try {
       const body = {
-        rankNumber:    Number(editForm.rankNumber),
-        labelEn:       editForm.labelEn,
-        labelZh:       editForm.labelZh,
-        basePSFLocked: editForm.basePSFLocked && Number(editForm.basePSF) > 0,
+        rankNumber:       Number(editForm.rankNumber),
+        labelEn:          editForm.labelEn,
+        labelZh:          editForm.labelZh,
+        rankDifferential: editForm.rankDifferential !== '' ? Number(editForm.rankDifferential) : null,
       };
-      if (editForm.basePSF !== '') body.basePSF = Number(editForm.basePSF);
-      else body.basePSF = 0;
       const res = await fetch(`/api/ranks/${rank.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1577,7 +1569,6 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
           rankNumber:        rank.rankNumber,
           labelEn:           rank.labelEn + ' (copy)',
           labelZh:           rank.labelZh + '（复制）',
-          basePSF:           Number(dupBasePSF),
           rankDifferential:  rank.rankDifferential,
           floorIncrements:   (rank.floorIncrements || []).map(fi => ({
             fromFloor: fi.fromFloor, toFloor: fi.toFloor, incrementPSF: fi.incrementPSF,
@@ -1588,7 +1579,6 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
       const newRank = await res.json();
       onDuplicated(newRank);
       setDuplicating(false);
-      setDupBasePSF('');
     } catch (err) {
       setDupError(err.message);
     } finally {
@@ -1623,16 +1613,9 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
               <span className="text-xs font-mono text-gray-400 tabular-nums">#{rank.rankNumber}</span>
               <span className="font-semibold text-gray-900 text-sm">{rank.labelEn}</span>
               <span className="text-xs text-gray-500">{rank.labelZh}</span>
-              {rank.basePSF != null && rank.basePSF > 0 ? (
-                <span className="text-xs font-semibold text-brand-600 tabular-nums">
-                  S${Number(rank.basePSF).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} psf
-                </span>
-              ) : (
-                <span className="text-xs text-gray-400 italic">auto</span>
-              )}
-              {rank.basePSFLocked && rank.basePSF > 0 && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
-                  🔒 {t('rank.locked')}
+              {rank.rankDifferential != null && (
+                <span className={`text-xs font-semibold tabular-nums ${rank.rankDifferential < 0 ? 'text-red-500' : rank.rankDifferential > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                  {rank.rankDifferential >= 0 ? '+' : ''}{rank.rankDifferential} psf
                 </span>
               )}
             </div>
@@ -1659,21 +1642,10 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
               <input className="input text-xs" name="labelZh" value={editForm.labelZh} onChange={onChange} />
             </div>
             <div>
-              <label className="label text-xs">{t('rank.basePSF')}</label>
-              <input className="input text-xs" name="basePSF" type="number" min="0" step="0.01" placeholder="auto"
-                value={editForm.basePSF} onChange={onChange} />
-            </div>
-            <div className="col-span-2 sm:col-span-4 flex items-center gap-2 pt-1">
-              <input
-                id={`lock-${rank.id}`} name="basePSFLocked" type="checkbox"
-                checked={editForm.basePSFLocked && Number(editForm.basePSF) > 0}
-                onChange={onChange}
-                disabled={!(Number(editForm.basePSF) > 0)}
-                className="rounded border-gray-300 text-amber-500 focus:ring-amber-500 disabled:opacity-40 disabled:cursor-not-allowed"
-              />
-              <label htmlFor={`lock-${rank.id}`} className={`text-xs cursor-pointer ${Number(editForm.basePSF) > 0 ? 'text-gray-600' : 'text-gray-400'}`}>
-                {t('rank.lockBasePSF')}
-              </label>
+              <label className="label text-xs">{t('rank.rankDifferential')}</label>
+              <input className="input text-xs" name="rankDifferential" type="number" step="0.01" placeholder="0"
+                value={editForm.rankDifferential} onChange={onChange} />
+              <p className="text-xs text-gray-400 mt-0.5">{t('rank.rankDifferentialHint')}</p>
             </div>
           </div>
         )}
@@ -1710,7 +1682,7 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
                     ? 'text-indigo-600 bg-indigo-50'
                     : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
                 }`}
-                onClick={() => { setDuplicating(v => !v); setDupBasePSF(rank.basePSF != null && rank.basePSF !== 0 ? rank.basePSF.toString() : ''); setDupError(null); }}
+                onClick={() => { setDuplicating(v => !v); setDupError(null); }}
                 title={t('rank.duplicate')}
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1750,23 +1722,14 @@ function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
 
       {/* ── Duplicate inline form ─────────────────────────────────────────── */}
       {duplicating && (
-        <div className="px-4 py-3 border-t border-indigo-100 bg-indigo-50 flex flex-wrap items-end gap-3">
-          <div>
-            <label className="label text-xs">
-              {t('rank.duplicateBasePSF')} <span className="text-red-500">*</span>
-            </label>
-            <input
-              className="input w-36 text-xs" type="number" min="0" step="0.01"
-              value={dupBasePSF} onChange={e => setDupBasePSF(e.target.value)}
-              autoFocus
-            />
-          </div>
-          {dupError && <p className="text-xs text-red-600 self-center">{dupError}</p>}
-          <div className="flex gap-2 self-end">
+        <div className="px-4 py-3 border-t border-indigo-100 bg-indigo-50 flex flex-wrap items-center gap-3">
+          <span className="text-xs text-indigo-700">{t('rank.duplicateTitle')}: <strong>{rank.labelEn} (copy)</strong></span>
+          {dupError && <p className="text-xs text-red-600">{dupError}</p>}
+          <div className="flex gap-2 ml-auto">
             <button
               className="btn-primary text-xs px-2 py-1"
-              onClick={confirmDuplicate} disabled={dupSaving || !dupBasePSF}
-            >{dupSaving ? '…' : t('rank.duplicateTitle')}</button>
+              onClick={confirmDuplicate} disabled={dupSaving}
+            >{dupSaving ? '…' : t('common.confirm')}</button>
             <button
               className="btn-secondary text-xs px-2 py-1"
               onClick={() => { setDuplicating(false); setDupError(null); }}

@@ -93,6 +93,13 @@ function SummaryPanel({ unitsRich, pricingParameters }) {
     if (d <= 10) return '#FFFBEB';
     return '#FEF2F2';
   }
+  function brStatusColor(a, t) {
+    if (a == null || t == null) return '#374151';
+    const d = Math.abs(a - t);
+    if (d <= 5)  return '#16A34A';
+    if (d <= 20) return '#D97706';
+    return '#DC2626';
+  }
 
   return (
     <div className="card p-0 overflow-hidden">
@@ -142,30 +149,35 @@ function SummaryPanel({ unitsRich, pricingParameters }) {
 
       {/* ── Per-bedroom breakdown ───────────────────────────────────────────── */}
       {bedroomTypes.length > 0 && (
-        <div className="border-t border-gray-100 px-5 py-3 flex flex-wrap gap-x-8 gap-y-3">
-          {bedroomTypes.map(br => {
-            const { revenue, sqft } = brMap[br];
-            const brAchieved = sqft > 0 ? revenue / sqft : null;
-            const brTarget   = targetBedroom[br] ?? null;
-            return (
-              <div key={br} className="flex flex-col gap-0.5">
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">
-                  {br}
-                </span>
-                <div className="flex items-baseline gap-1.5">
-                  <span
-                    className="text-base font-semibold tabular-nums"
-                    style={{ color: statusColor(brAchieved, brTarget) }}
-                  >
-                    {fmtPSF(brAchieved)}
+        <div className="border-t border-gray-100 px-5 pt-3 pb-2">
+          <div className="flex flex-wrap gap-x-8 gap-y-3 mb-2">
+            {bedroomTypes.map(br => {
+              const { revenue, sqft } = brMap[br];
+              const brAchieved = sqft > 0 ? revenue / sqft : null;
+              const brTarget   = targetBedroom[br] ?? null;
+              return (
+                <div key={br} className="flex flex-col gap-0.5">
+                  <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">
+                    {br}
                   </span>
-                  {brTarget != null && (
-                    <span className="text-xs text-gray-400">/ {fmtPSF(brTarget)}</span>
-                  )}
+                  <div className="flex items-baseline gap-1.5">
+                    <span
+                      className="text-base font-semibold tabular-nums"
+                      style={{ color: brStatusColor(brAchieved, brTarget) }}
+                    >
+                      {fmtPSF(brAchieved)}
+                    </span>
+                    {brTarget != null && (
+                      <span className="text-xs text-gray-400">/ {fmtPSF(brTarget)}</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-gray-400 italic">
+            Bedroom type targets are best-effort. Overall avg PSF takes priority.
+          </p>
         </div>
       )}
     </div>

@@ -35,7 +35,7 @@ router.get('/:id', async (req, res, next) => {
 // POST /api/ranks
 router.post('/', async (req, res, next) => {
   try {
-    const { projectId, rankNumber, labelEn, labelZh, basePSF, basePSFLocked, rankDifferential, floorIncrements } = req.body;
+    const { projectId, rankNumber, labelEn, labelZh, rankDifferential, floorIncrements } = req.body;
     if (!projectId || !labelEn || !labelZh) {
       return res.status(400).json({ error: 'projectId, labelEn, and labelZh are required' });
     }
@@ -45,9 +45,7 @@ router.post('/', async (req, res, next) => {
         rankNumber: rankNumber ?? 1,
         labelEn,
         labelZh,
-        basePSF:          basePSF !== undefined && basePSF !== '' ? Number(basePSF) : 0,
-        basePSFLocked:    basePSFLocked ?? false,
-        rankDifferential: rankDifferential ? Number(rankDifferential) : 0,
+        rankDifferential: rankDifferential != null && rankDifferential !== '' ? Number(rankDifferential) : null,
         floorIncrements: floorIncrements
           ? { create: floorIncrements.map(fi => ({
               fromFloor:    Number(fi.fromFloor),
@@ -67,16 +65,14 @@ router.post('/', async (req, res, next) => {
 // PATCH /api/ranks/:id
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { rankNumber, labelEn, labelZh, basePSF, basePSFLocked, rankDifferential } = req.body;
+    const { rankNumber, labelEn, labelZh, rankDifferential } = req.body;
     const rank = await prisma.rank.update({
       where: { id: req.params.id },
       data: {
         ...(rankNumber       !== undefined && { rankNumber:       Number(rankNumber) }),
         ...(labelEn          !== undefined && { labelEn }),
         ...(labelZh          !== undefined && { labelZh }),
-        ...(basePSF          !== undefined && { basePSF:          Number(basePSF) }),
-        ...(basePSFLocked    !== undefined && { basePSFLocked:    Boolean(basePSFLocked) }),
-        ...(rankDifferential !== undefined && { rankDifferential: Number(rankDifferential) }),
+        ...(rankDifferential !== undefined && { rankDifferential: rankDifferential !== null && rankDifferential !== '' ? Number(rankDifferential) : null }),
       },
       include: { floorIncrements: true },
     });

@@ -53,12 +53,121 @@ function computeStats(units) {
   return { count: valid.length, avgPSF, highPrice, lowPrice };
 }
 
-// ─── MetricCard ───────────────────────────────────────────────────────────────
-function MetricCard({ label, value }) {
+// ─── SummaryPanel ─────────────────────────────────────────────────────────────
+function SummaryPanel({ unitsRich, pricingParameters }) {
+  const targetOverall = pricingParameters?.targetOverallAvgPSF ?? null;
+
+  const targetBedroom = {};
+  try {
+    const parsed = JSON.parse(pricingParameters?.targetBedroomPSF || '{}');
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v != null && Number(v) > 0) targetBedroom[k] = Number(v);
+    }
+  } catch {}
+
+  const priced    = unitsRich.filter(u => u.finalPrice != null && u.sizeSqft != null);
+  const totalSqft = priced.reduce((s, u) => s + u.sizeSqft, 0);
+  const totalRev  = priced.reduce((s, u) => s + u.finalPrice, 0);
+  const achieved  = totalSqft > 0 ? totalRev / totalSqft : null;
+
+  const brMap = {};
+  for (const u of priced) {
+    const br = u.bedroomType || 'Unknown';
+    if (!brMap[br]) brMap[br] = { revenue: 0, sqft: 0 };
+    brMap[br].revenue += u.finalPrice;
+    brMap[br].sqft    += u.sizeSqft;
+  }
+  const bedroomTypes = Object.keys(brMap).sort();
+
+  function statusColor(a, t) {
+    if (a == null || t == null) return '#374151';
+    const d = Math.abs(a - t);
+    if (d <= 1)  return '#16A34A';
+    if (d <= 10) return '#D97706';
+    return '#DC2626';
+  }
+  function statusBg(a, t) {
+    if (a == null || t == null) return '#FFFFFF';
+    const d = Math.abs(a - t);
+    if (d <= 1)  return '#F0FDF4';
+    if (d <= 10) return '#FFFBEB';
+    return '#FEF2F2';
+  }
+
   return (
-    <div className="card py-4">
-      <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">{label}</div>
-      <div className="text-2xl font-bold text-gray-900 tabular-nums">{value ?? '—'}</div>
+    <div className="card p-0 overflow-hidden">
+      {/* ── Overall PSF + aggregate totals ─────────────────────────────────── */}
+      <div
+        className="px-5 py-4 flex flex-wrap items-center justify-between gap-x-8 gap-y-3"
+        style={{ backgroundColor: statusBg(achieved, targetOverall) }}
+      >
+        <div>
+          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+            Overall Avg PSF
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span
+              className="text-2xl font-bold tabular-nums"
+              style={{ color: statusColor(achieved, targetOverall) }}
+            >
+              {fmtPSF(achieved)}
+            </span>
+            {targetOverall != null && (
+              <span className="text-sm text-gray-400">/ {fmtPSF(targetOverall)} target</span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-x-8 gap-y-1">
+          <div className="text-right">
+            <div className="text-xs text-gray-400 mb-0.5">Units</div>
+            <div className="text-lg font-semibold text-gray-800 tabular-nums">
+              {priced.length.toLocaleString()}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-gray-400 mb-0.5">Total NSA</div>
+            <div className="text-lg font-semibold text-gray-800 tabular-nums">
+              {totalSqft.toLocaleString()} sqft
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-gray-400 mb-0.5">Total Revenue</div>
+            <div className="text-lg font-semibold text-gray-800 tabular-nums">
+              {fmtPrice(totalRev)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Per-bedroom breakdown ───────────────────────────────────────────── */}
+      {bedroomTypes.length > 0 && (
+        <div className="border-t border-gray-100 px-5 py-3 flex flex-wrap gap-x-8 gap-y-3">
+          {bedroomTypes.map(br => {
+            const { revenue, sqft } = brMap[br];
+            const brAchieved = sqft > 0 ? revenue / sqft : null;
+            const brTarget   = targetBedroom[br] ?? null;
+            return (
+              <div key={br} className="flex flex-col gap-0.5">
+                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">
+                  {br}
+                </span>
+                <div className="flex items-baseline gap-1.5">
+                  <span
+                    className="text-base font-semibold tabular-nums"
+                    style={{ color: statusColor(brAchieved, brTarget) }}
+                  >
+                    {fmtPSF(brAchieved)}
+                  </span>
+                  {brTarget != null && (
+                    <span className="text-xs text-gray-400">/ {fmtPSF(brTarget)}</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -559,7 +668,11 @@ export default function PricingEngine() {
   const allUnits = project
     ? project.blocks.flatMap(b => b.stacks.flatMap(s => s.units || []))
     : [];
-  const projectStats        = computeStats(allUnits);
+  const allUnitsRich = project
+    ? project.blocks.flatMap(b =>
+        b.stacks.flatMap(s => (s.units || []).map(u => ({ ...u, bedroomType: s.bedroomType })))
+      )
+    : [];
   const hasUnits            = allUnits.length > 0;
   const manualOverrideCount = allUnits.filter(u => u.isManualOverride).length;
 
@@ -683,13 +796,13 @@ export default function PricingEngine() {
             </div>
           </div>
 
-          {/* Summary metric cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <MetricCard label={t('pricing.statTotalUnits')} value={projectStats.count.toLocaleString()} />
-            <MetricCard label={t('pricing.statAvgPSF')}     value={fmtPSF(projectStats.avgPSF)} />
-            <MetricCard label={t('pricing.statHighPrice')}  value={fmtPrice(projectStats.highPrice)} />
-            <MetricCard label={t('pricing.statLowPrice')}   value={fmtPrice(projectStats.lowPrice)} />
-          </div>
+          {/* Summary panel */}
+          {hasUnits && (
+            <SummaryPanel
+              unitsRich={allUnitsRich}
+              pricingParameters={project.pricingParameters}
+            />
+          )}
 
           {/* Generate result banner */}
           {generateResult && (

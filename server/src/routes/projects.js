@@ -168,12 +168,48 @@ router.post('/:id/generate-units', async (req, res, next) => {
     const penthouseMult = params?.penthouseMultiplier ?? 1.0;
     const targetOverallAvgPSF = params?.targetOverallAvgPSF ?? null;
 
+    // ── Validate: targetOverallAvgPSF must be set ─────────────────────────────
+    if (targetOverallAvgPSF == null || targetOverallAvgPSF <= 0) {
+      return res.status(400).json({ error: 'Please set an overall target avg PSF in pricing parameters before generating' });
+    }
+
+    // ── Validate: rank band coverage (only for ranks with bands defined) ──────
+    if (project.blocks.length > 0) {
+      const projMinFloor = Math.min(...project.blocks.map(b => b.startingFloor));
+      const projMaxFloor = Math.max(...project.blocks.map(b => b.startingFloor + b.totalStoreys - 1));
+      for (const rank of project.ranks) {
+        if (rank.floorIncrements.length === 0) continue;
+        const sorted = [...rank.floorIncrements].sort((a, b) => a.fromFloor - b.fromFloor);
+        const uncovered = [];
+        let expected = projMinFloor;
+        for (const band of sorted) {
+          for (let f = expected; f < band.fromFloor; f++) uncovered.push(f);
+          expected = Math.max(expected, band.toFloor + 1);
+        }
+        for (let f = expected; f <= projMaxFloor; f++) uncovered.push(f);
+        if (uncovered.length > 0) {
+          const display = uncovered.length > 8
+            ? `${uncovered.slice(0, 8).join(', ')} and ${uncovered.length - 8} more`
+            : uncovered.join(', ');
+          return res.status(400).json({ error: `Rank "${rank.labelEn}": floor bands have gaps — floors not covered: ${display}` });
+        }
+      }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
     function parseExcl(str) {
       try { return new Set(JSON.parse(str || '[]')); } catch { return new Set(); }
     }
     function roundTo(value, unit) {
       return Math.round(value / unit) * unit;
+    }
+    // Returns the incrementPSF for the single band that owns `floor`.
+    // Bands are pre-sorted by fromFloor (Prisma orderBy). Upper boundary is
+    // exclusive for every band except the last, preventing a shared boundary
+    // floor from being counted in two bands simultaneously.
+    function getBandIncrement(sortedIncrements, floor) {
+      const band = sortedIncrements.find(fi => fi.fromFloor <= floor && floor <= fi.toFloor);
+      return band ? (band.incrementPSF ?? 0) : 0;
     }
     function countValidFloors(block, stack) {
       const blockExcl  = parseExcl(block.excludedFloors);
@@ -243,21 +279,18 @@ router.post('/:id/generate-units', async (req, res, next) => {
       targetRankAvgPSFs[rank.id] = targetRankAvgPSF;
     }
 
-    // ── Step 3: Solve increment first, then derive basePSF ───────────────────
-    // Unlocked, no bands:
-    //   increment = target / (n × 0.5 + 1)  — proportional to floor count
-    //   basePSF   = target − increment × (n − 1) / 2
-    //   → avg across all floors = basePSF + increment × (n−1)/2 = target ✓
-    // Unlocked, bands:
-    //   basePSF = target × 0.85  (15 % headroom absorbed by the band curve)
-    //   k       = (target − basePSF) / avgCumContrib
-    // Locked (either): stored basePSF is fixed; increment/k solves around it.
-    const solvedBasePSFs   = {};  // rankId → basePSF (floor-1 anchor)
+    // ── Step 3: Solve band-scale k (basePSF is always rank.basePSF) ─────────
+    // Band ranks: k = (targetAvg − basePSF) / avgCumContrib at k=1.
+    //   Avg PSF = basePSF + k × avgCumContrib  →  k = (target − basePSF) / avgCumContrib
+    // No-band ranks (backward-compat fallback):
+    //   increment = (target − basePSF) / ((n−1)/2)
+    const solvedBasePSFs   = {};  // rankId → basePSF (floor-1 anchor, always rank.basePSF)
     const solvedIncrements = {};  // rankId → uniform increment per floor, or null (bands)
     const solvedBandScales = {};  // rankId → scale factor k applied to band incrementPSFs
 
     for (const rank of project.ranks) {
-      const target = targetRankAvgPSFs[rank.id];
+      const target  = targetRankAvgPSFs[rank.id];
+      const basePSF = rank.basePSF > 0 ? rank.basePSF : (target ?? 0);
 
       if (rank.floorIncrements.length > 0) {
         // Simulate cumulative band contributions at k=1 across all stacks of this rank
@@ -278,9 +311,7 @@ router.post('/:id/generate-units', async (req, res, next) => {
             for (let idx = 0; idx < validFloors.length; idx++) {
               const floor = validFloors[idx];
               if (idx > 0) {
-                cumIncr += rank.floorIncrements
-                  .filter(fi => fi.fromFloor <= floor && floor <= fi.toFloor)
-                  .reduce((s, fi) => s + (fi.incrementPSF ?? 0), 0);
+                cumIncr += getBandIncrement(rank.floorIncrements, floor);
               }
               cumContribSum += cumIncr;
               simUnitCount++;
@@ -288,49 +319,33 @@ router.post('/:id/generate-units', async (req, res, next) => {
           }
         }
         const avgCumContrib = simUnitCount > 0 ? cumContribSum / simUnitCount : 0;
-
-        const basePSF = (rank.basePSFLocked && rank.basePSF > 0)
-          ? rank.basePSF          // locked: keep stored value
-          : target * 0.85;        // unlocked: 85 % anchor, 15 % headroom for band curve
         solvedBasePSFs[rank.id]   = basePSF;
-        solvedBandScales[rank.id] = avgCumContrib > 0 ? (target - basePSF) / avgCumContrib : 1.0;
+        solvedBandScales[rank.id] = avgCumContrib > 0 ? (target - basePSF) / avgCumContrib : 0;
         solvedIncrements[rank.id] = null;
         continue;
       }
 
-      // No bands
+      // No bands — backward-compat: solve uniform increment from fixed basePSF
       const n = rankUnitCounts[rank.id] || 0;
-      if (n <= 1) {
-        solvedBasePSFs[rank.id]   = target;
-        solvedIncrements[rank.id] = 0;
-        continue;
-      }
-
-      if (rank.basePSFLocked && rank.basePSF > 0) {
-        // Locked: fixed basePSF, solve increment so avg hits target
-        // avg = basePSF + increment × (n−1)/2  →  increment = (target − basePSF) / ((n−1)/2)
-        solvedBasePSFs[rank.id]   = rank.basePSF;
-        solvedIncrements[rank.id] = (target - rank.basePSF) / ((n - 1) / 2);
-      } else {
-        // Unlocked: increment = 0.3% of target PSF per floor (≈ $5-6/floor at typical targets)
-        // Round to 2 dp to avoid floating-point noise in per-floor prices.
-        // basePSF derived so avg across all floors = target:
-        //   avg = basePSF + increment × (n−1)/2  →  basePSF = target − increment × (n−1)/2
-        const increment = Math.round(target * 0.003 * 100) / 100;
-        solvedBasePSFs[rank.id]   = target - increment * (n - 1) / 2;
-        solvedIncrements[rank.id] = increment;
-      }
+      solvedBasePSFs[rank.id]   = basePSF;
+      solvedIncrements[rank.id] = n > 1 ? (target - basePSF) / ((n - 1) / 2) : 0;
     }
 
-    // ── Step 5: Delete existing units and generate new ones ───────────────────
-    const lockedRankIdSet = new Set(project.ranks.filter(r => r.basePSFLocked && r.basePSF > 0).map(r => r.id));
+    // ── Step 5: Preserve manual overrides, delete generated units ────────────
+    const rankRevenue = {};  // rankId → { revenue, sqft } for per-rank accuracy check
 
-    const existingStacks = await prisma.stack.findMany({
-      where: { block: { projectId } },
-      select: { id: true },
-    });
-    if (existingStacks.length > 0) {
-      await prisma.unit.deleteMany({ where: { stackId: { in: existingStacks.map(s => s.id) } } });
+    const allStackIds = project.blocks.flatMap(b => b.stacks.map(s => s.id));
+    const manualUnits = allStackIds.length > 0
+      ? await prisma.unit.findMany({
+          where: { stackId: { in: allStackIds }, isManualOverride: true },
+        })
+      : [];
+    const manualUnitMap = new Map(manualUnits.map(u => [`${u.stackId}-${u.floor}`, u]));
+
+    if (allStackIds.length > 0) {
+      await prisma.unit.deleteMany({
+        where: { stackId: { in: allStackIds }, isManualOverride: false },
+      });
     }
 
     const unitsToCreate = [];
@@ -361,7 +376,6 @@ router.post('/:id/generate-units', async (req, res, next) => {
         const uniformIncr = rankId ? (solvedIncrements[rankId] ?? 0) : 0;
         const increments  = rank?.floorIncrements ?? [];
         const bandScale   = rankId ? (solvedBandScales[rankId] ?? 1.0) : 1.0;
-        const rankLocked  = rankId ? lockedRankIdSet.has(rankId) : true;
         const stackNumStr = stack.stackNumber.toString().padStart(2, '0');
 
         let prevCalcPSF   = null;
@@ -375,15 +389,32 @@ router.post('/:id/generate-units', async (req, res, next) => {
           // Per-floor increment — apply band scale factor k to manual bands
           let incrPSF;
           if (useManual) {
-            incrPSF = increments
-              .filter(fi => fi.fromFloor <= floor && floor <= fi.toFloor)
-              .reduce((s, fi) => s + (fi.incrementPSF ?? 0) * bandScale, 0);
+            incrPSF = getBandIncrement(increments, floor) * bandScale;
           } else {
             incrPSF = uniformIncr;
           }
 
           const calcPSF   = prevCalcPSF === null ? basePSF : prevCalcPSF + incrPSF;
           const calcPrice = roundTo(calcPSF * stack.standardSizeSqft, roundingUnit);
+
+          // If this floor has a manual override, preserve it and keep the chain going
+          const manualKey      = `${stack.id}-${floor}`;
+          const existingManual = manualUnitMap.get(manualKey);
+          if (existingManual) {
+            unitsToCreate.push({ ...existingManual, _isManual: true });
+            const brM = stack.bedroomType || 'Unknown';
+            if (!brFinalPSFSum[brM]) brFinalPSFSum[brM] = { sum: 0, count: 0 };
+            brFinalPSFSum[brM].sum   += existingManual.finalPSF ?? 0;
+            brFinalPSFSum[brM].count += 1;
+            if (!blockSummary[block.blockName]) blockSummary[block.blockName] = { sum: 0, count: 0 };
+            blockSummary[block.blockName].sum   += existingManual.finalPSF ?? 0;
+            blockSummary[block.blockName].count += 1;
+            prevCalcPSF   = calcPSF;
+            prevCalcPrice = calcPrice;
+            blockUnitCount++;
+            continue;
+          }
+
           // Back-calculate PSF from the rounded price so stored PSF and price are consistent
           const calcPSFRounded = stack.standardSizeSqft > 0 ? calcPrice / stack.standardSizeSqft : calcPSF;
 
@@ -411,7 +442,6 @@ router.post('/:id/generate-units', async (req, res, next) => {
             finalPSF,
             finalPrice,
             isManualOverride: false,
-            _rankLocked:      rankLocked,
           });
 
           const br = stack.bedroomType || 'Unknown';
@@ -421,6 +451,11 @@ router.post('/:id/generate-units', async (req, res, next) => {
           if (!blockSummary[block.blockName]) blockSummary[block.blockName] = { sum: 0, count: 0 };
           blockSummary[block.blockName].sum   += finalPSF ?? 0;
           blockSummary[block.blockName].count += 1;
+          if (rankId) {
+            if (!rankRevenue[rankId]) rankRevenue[rankId] = { revenue: 0, sqft: 0 };
+            rankRevenue[rankId].revenue += (finalPSF ?? 0) * sizeSqft;
+            rankRevenue[rankId].sqft    += sizeSqft;
+          }
 
           prevCalcPSF   = calcPSF;       // keep raw for next floor's increment chain
           prevCalcPrice = calcPrice;
@@ -437,49 +472,25 @@ router.post('/:id/generate-units', async (req, res, next) => {
       });
     }
 
-    // ── Step 5b: Correction pass — sqft-weighted, skip locked-rank units ──────
-    let correctionWarning = null;
-    if (targetOverallAvgPSF && unitsToCreate.length > 0) {
-      const totalSqftAll = unitsToCreate.reduce((s, u) => s + u.sizeSqft, 0);
-      const preRevenue   = unitsToCreate.reduce((s, u) => s + (u.finalPSF ?? 0) * u.sizeSqft, 0);
-      const preAvg       = totalSqftAll > 0 ? preRevenue / totalSqftAll : 0;
-
-      if (Math.abs(preAvg - targetOverallAvgPSF) > 1) {
-        const unlockedSqft = unitsToCreate
-          .filter(u => !u._rankLocked)
-          .reduce((s, u) => s + u.sizeSqft, 0);
-
-        if (unlockedSqft > 0) {
-          // adj × unlockedSqft must cover the entire sqft-weighted revenue gap
-          const adj = (targetOverallAvgPSF - preAvg) * totalSqftAll / unlockedSqft;
-          for (const u of unitsToCreate) {
-            if (u._rankLocked) continue;
-            // Round price first, then back-calculate PSF for consistency
-            u.finalPrice = roundTo(((u.finalPSF ?? 0) + adj) * u.sizeSqft, roundingUnit);
-            u.finalPSF   = u.sizeSqft > 0 ? u.finalPrice / u.sizeSqft : (u.finalPSF ?? 0) + adj;
-            if (!u.isPenthouse) {
-              u.calculatedPrice = u.finalPrice;
-              u.calculatedPSF   = u.finalPSF;
-            }
-          }
-          for (const br of Object.keys(brFinalPSFSum)) {
-            brFinalPSFSum[br].sum += adj * brFinalPSFSum[br].count;
-          }
-          for (const blk of Object.keys(blockSummary)) {
-            blockSummary[blk].sum += adj * blockSummary[blk].count;
-          }
-        }
-
-        const postRevenue = unitsToCreate.reduce((s, u) => s + (u.finalPSF ?? 0) * u.sizeSqft, 0);
-        const postAvg     = totalSqftAll > 0 ? postRevenue / totalSqftAll : 0;
-        if (Math.abs(postAvg - targetOverallAvgPSF) > 1) {
-          correctionWarning = `Cannot reach target PSF within ±$1. Achieved: S$${postAvg.toFixed(0)}, Target: S$${targetOverallAvgPSF.toFixed(0)}`;
-        }
+    // ── Per-rank target accuracy check ───────────────────────────────────────
+    const rankWarnings = [];
+    for (const rank of project.ranks) {
+      const rv     = rankRevenue[rank.id];
+      const target = targetRankAvgPSFs[rank.id];
+      if (!rv || rv.sqft === 0 || !target) continue;
+      const achieved = rv.revenue / rv.sqft;
+      if (Math.abs(achieved - target) > 1) {
+        rankWarnings.push(`${rank.labelEn}: target S$${Math.round(target)}, achieved S$${Math.round(achieved)}`);
       }
     }
+    const correctionWarning = rankWarnings.length > 0 ? rankWarnings.join(' | ') : null;
 
-    // Strip temp field before DB insert
-    await prisma.unit.createMany({ data: unitsToCreate.map(({ _rankLocked, ...u }) => u) });
+    // Skip manual override units (already in DB), strip temp field
+    await prisma.unit.createMany({
+      data: unitsToCreate
+        .filter(u => !u._isManual)
+        .map(({ _isManual, ...u }) => u),
+    });
 
     // ── Step 6: Build solver summary ──────────────────────────────────────────
     const totalSqftFinal = unitsToCreate.reduce((s, u) => s + u.sizeSqft, 0);
@@ -518,6 +529,7 @@ router.post('/:id/generate-units', async (req, res, next) => {
 
     res.json({
       totalUnits: unitsToCreate.length,
+      manualOverrideCount: manualUnits.length,
       achievedOverallAvgPSF,
       targetOverallAvgPSF,
       byBedroomType,
@@ -525,6 +537,183 @@ router.post('/:id/generate-units', async (req, res, next) => {
       byBlock,
       correctionWarning,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── PATCH /api/projects/:id/recalculate-above ───────────────────────────────
+// After a manual override, recalculate all non-overridden units above that floor
+// in the same stack, using the override's finalPSF as the new chain anchor.
+router.patch('/:id/recalculate-above', async (req, res, next) => {
+  try {
+    const { stackId, fromFloor } = req.body;
+    if (!stackId || fromFloor == null) {
+      return res.status(400).json({ error: 'stackId and fromFloor are required' });
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: req.params.id },
+      include: {
+        pricingParameters: true,
+        blocks: {
+          include: {
+            stacks: {
+              include: {
+                rank: { include: { floorIncrements: { orderBy: { fromFloor: 'asc' } } } },
+              },
+            },
+          },
+        },
+        ranks: { include: { floorIncrements: { orderBy: { fromFloor: 'asc' } } } },
+      },
+    });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const targetBlock = project.blocks.find(b => b.stacks.some(s => s.id === stackId));
+    const targetStack = targetBlock?.stacks.find(s => s.id === stackId);
+    if (!targetStack) return res.status(404).json({ error: 'Stack not found' });
+
+    const rank = targetStack.rank;
+    if (!rank || rank.floorIncrements.length === 0) {
+      return res.json({ updatedCount: 0 });
+    }
+
+    const params       = project.pricingParameters;
+    const roundingUnit = params?.roundingUnit ?? project.roundingUnit ?? 100;
+
+    // Re-derive targetRankAvgPSF (same logic as generate-units Step 2)
+    const targetOverallAvgPSF = params?.targetOverallAvgPSF ?? null;
+    const brTargetMap = {};
+    if (params) {
+      try {
+        const parsed = JSON.parse(params.targetBedroomPSF || '{}');
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v != null && Number(v) > 0) brTargetMap[k] = Number(v);
+        }
+      } catch { /* ignore */ }
+      if (params.target2BRPSF && !brTargetMap['2BR']) brTargetMap['2BR'] = params.target2BRPSF;
+      if (params.target3BRPSF && !brTargetMap['3BR']) brTargetMap['3BR'] = params.target3BRPSF;
+      if (params.target4BRPSF && !brTargetMap['4BR']) brTargetMap['4BR'] = params.target4BRPSF;
+      if (params.target5BRPSF && !brTargetMap['5BR']) brTargetMap['5BR'] = params.target5BRPSF;
+    }
+
+    function parseExclR(str) {
+      try { return new Set(JSON.parse(str || '[]')); } catch { return new Set(); }
+    }
+    function getBandIncrementR(sortedIncrements, floor) {
+      const band = sortedIncrements.find(fi => fi.fromFloor <= floor && floor <= fi.toFloor);
+      return band ? (band.incrementPSF ?? 0) : 0;
+    }
+
+    // Count units per bedroom type for this rank (to compute targetRankAvgPSF)
+    const brCounts = {};
+    let totalCount = 0;
+    for (const blk of project.blocks) {
+      const blockExcl = parseExclR(blk.excludedFloors);
+      const maxFloor  = blk.startingFloor + blk.totalStoreys - 1;
+      for (const stk of blk.stacks) {
+        if (stk.rankId !== rank.id) continue;
+        const stackExcl = parseExclR(stk.stackExcludedFloors);
+        const combined  = new Set([...blockExcl, ...stackExcl]);
+        const start     = stk.stackStartingFloor ?? blk.startingFloor;
+        let n = 0;
+        for (let f = start; f <= maxFloor; f++) if (!combined.has(f)) n++;
+        if (n === 0) continue;
+        const br = stk.bedroomType || 'Unknown';
+        brCounts[br] = (brCounts[br] || 0) + n;
+        totalCount  += n;
+      }
+    }
+
+    let targetRankAvgPSF = targetOverallAvgPSF ?? 0;
+    if (totalCount > 0 && Object.keys(brTargetMap).length > 0) {
+      const hasTarget = Object.keys(brCounts).some(br => brTargetMap[br]);
+      if (hasTarget) {
+        let wt = 0;
+        for (const [br, count] of Object.entries(brCounts)) {
+          wt += (brTargetMap[br] ?? targetOverallAvgPSF ?? 0) * count;
+        }
+        targetRankAvgPSF = wt / totalCount;
+      }
+    }
+
+    const basePSF = rank.basePSF > 0 ? rank.basePSF : (targetRankAvgPSF ?? 0);
+
+    // Compute avgCumContrib at k=1 for this rank
+    let cumContribSum = 0, simUnitCount = 0;
+    for (const blk of project.blocks) {
+      const blockExcl = parseExclR(blk.excludedFloors);
+      const maxFloor  = blk.startingFloor + blk.totalStoreys - 1;
+      for (const stk of blk.stacks) {
+        if (stk.rankId !== rank.id) continue;
+        const stackExcl   = parseExclR(stk.stackExcludedFloors);
+        const combined    = new Set([...blockExcl, ...stackExcl]);
+        const start       = stk.stackStartingFloor ?? blk.startingFloor;
+        const validFloors = [];
+        for (let f = start; f <= maxFloor; f++) {
+          if (!combined.has(f)) validFloors.push(f);
+        }
+        let cumIncr = 0;
+        for (let idx = 0; idx < validFloors.length; idx++) {
+          const floor = validFloors[idx];
+          if (idx > 0) {
+            cumIncr += getBandIncrementR(rank.floorIncrements, floor);
+          }
+          cumContribSum += cumIncr;
+          simUnitCount++;
+        }
+      }
+    }
+    const avgCumContrib = simUnitCount > 0 ? cumContribSum / simUnitCount : 0;
+    const bandScale     = avgCumContrib > 0 ? (targetRankAvgPSF - basePSF) / avgCumContrib : 0;
+
+    // Load units from this stack at and above fromFloor
+    const unitsAbove = await prisma.unit.findMany({
+      where:   { stackId, floor: { gte: fromFloor } },
+      orderBy: { floor: 'asc' },
+    });
+    if (unitsAbove.length === 0) return res.json({ updatedCount: 0 });
+
+    const anchorUnit = unitsAbove.find(u => u.floor === fromFloor);
+    if (!anchorUnit) return res.status(404).json({ error: 'Anchor unit not found' });
+
+    function roundToR(value, unit) {
+      return Math.round(value / unit) * unit;
+    }
+
+    let prevPSF = anchorUnit.finalPSF ?? basePSF;
+    const updates = [];
+
+    for (const unit of unitsAbove) {
+      if (unit.floor === fromFloor) continue; // anchor itself, skip
+
+      if (unit.isManualOverride) {
+        // Manual override acts as a new anchor — don't change it, but reset chain from it
+        prevPSF = unit.finalPSF ?? prevPSF;
+        continue;
+      }
+
+      const incrPSF = getBandIncrementR(rank.floorIncrements, unit.floor) * bandScale;
+
+      const calcPSF        = prevPSF + incrPSF;
+      const calcPrice      = roundToR(calcPSF * targetStack.standardSizeSqft, roundingUnit);
+      const calcPSFRounded = targetStack.standardSizeSqft > 0 ? calcPrice / targetStack.standardSizeSqft : calcPSF;
+
+      updates.push({ id: unit.id, finalPSF: calcPSFRounded, finalPrice: calcPrice, calculatedPSF: calcPSFRounded, calculatedPrice: calcPrice });
+      prevPSF = calcPSF;
+    }
+
+    if (updates.length > 0) {
+      await prisma.$transaction(
+        updates.map(u => prisma.unit.update({
+          where: { id: u.id },
+          data:  { finalPSF: u.finalPSF, finalPrice: u.finalPrice, calculatedPSF: u.calculatedPSF, calculatedPrice: u.calculatedPrice },
+        }))
+      );
+    }
+
+    res.json({ updatedCount: updates.length });
   } catch (err) {
     next(err);
   }

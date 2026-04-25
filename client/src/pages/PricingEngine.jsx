@@ -64,10 +64,94 @@ function MetricCard({ label, value }) {
 }
 
 // ─── BlockPricingTable ────────────────────────────────────────────────────────
-function BlockPricingTable({ block }) {
+function BlockPricingTable({ block, onUnitChange, onAfterOverride, roundingUnit = 100 }) {
   const { t } = useTranslation();
-  const [collapsed,    setCollapsed]    = useState(false);
-  const [showFloorAvg, setShowFloorAvg] = useState(true);
+  const [collapsed,      setCollapsed]      = useState(false);
+  const [showFloorAvg,   setShowFloorAvg]   = useState(true);
+  const [editingUnitId,  setEditingUnitId]  = useState(null);
+  const [editingStackId, setEditingStackId] = useState(null);
+  const [editingFloor,   setEditingFloor]   = useState(null);
+  const [editPSF,        setEditPSF]        = useState('');
+  const [editPrice,      setEditPrice]      = useState('');
+  const [editSizeSqft,   setEditSizeSqft]   = useState(0);
+  const [saving,         setSaving]         = useState(false);
+
+  function openEdit(unit, stackId) {
+    setEditingUnitId(unit.id);
+    setEditingStackId(stackId);
+    setEditingFloor(unit.floor);
+    setEditPSF(unit.finalPSF  != null ? String(Math.round(unit.finalPSF  * 100) / 100) : '');
+    setEditPrice(unit.finalPrice != null ? String(unit.finalPrice) : '');
+    setEditSizeSqft(unit.sizeSqft ?? 0);
+  }
+
+  function handleEditPSFChange(val) {
+    setEditPSF(val);
+    const psf = parseFloat(val);
+    if (isFinite(psf) && editSizeSqft > 0) {
+      setEditPrice(String(Math.round(psf * editSizeSqft / roundingUnit) * roundingUnit));
+    }
+  }
+
+  function handleEditPriceChange(val) {
+    setEditPrice(val);
+    const price = parseFloat(val);
+    if (isFinite(price) && editSizeSqft > 0) {
+      setEditPSF(String(Math.round(price / editSizeSqft * 100) / 100));
+    }
+  }
+
+  function handleEditKeyDown(e) {
+    if (e.key === 'Escape') { setEditingUnitId(null); return; }
+    if (e.key === 'Enter')  { e.preventDefault(); handleSaveEdit(); }
+  }
+
+  async function handleSaveEdit() {
+    const psf   = parseFloat(editPSF);
+    const price = parseFloat(editPrice);
+    if (!isFinite(psf) || !isFinite(price)) return;
+    setSaving(true);
+    const savedUnitId  = editingUnitId;
+    const savedStackId = editingStackId;
+    const savedFloor   = editingFloor;
+    try {
+      const res = await fetch(`/api/units/${savedUnitId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ finalPSF: psf, finalPrice: price, isManualOverride: true }),
+      });
+      if (!res.ok) throw new Error('Save failed');
+      onUnitChange?.(savedUnitId, { finalPSF: psf, finalPrice: price, isManualOverride: true });
+      setEditingUnitId(null);
+      setEditingStackId(null);
+      setEditingFloor(null);
+      onAfterOverride?.(savedStackId, savedFloor);
+    } catch {
+      // keep edit open so user can retry
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const [resetting, setResetting] = useState(new Set());
+
+  async function handleReset(unit) {
+    setResetting(prev => new Set([...prev, unit.id]));
+    try {
+      const res = await fetch(`/api/units/${unit.id}/reset`, { method: 'PATCH' });
+      if (!res.ok) throw new Error('Reset failed');
+      const data = await res.json();
+      onUnitChange?.(unit.id, {
+        finalPSF:         data.finalPSF,
+        finalPrice:       data.finalPrice,
+        isManualOverride: false,
+      });
+    } catch {
+      // silently keep state on error
+    } finally {
+      setResetting(prev => { const s = new Set(prev); s.delete(unit.id); return s; });
+    }
+  }
 
   // Stacks left-to-right by stack number
   const sortedStacks  = [...block.stacks].sort((a, b) => a.stackNumber - b.stackNumber);
@@ -95,6 +179,14 @@ function BlockPricingTable({ block }) {
   const stackAvgPSFs = sortedStacks.map(stack => {
     const us = (stack.units || []).filter(u => u.finalPSF != null);
     return us.length ? us.reduce((s, u) => s + u.finalPSF, 0) / us.length : null;
+  });
+
+  // Per-stack: for each floor, the PSF of the unit at the floor just below (for delta display)
+  const prevStackPSF = sortedStacks.map(stack => {
+    const sorted = [...(stack.units || [])].filter(u => u.finalPSF != null).sort((a, b) => a.floor - b.floor);
+    const map = {};
+    for (let j = 1; j < sorted.length; j++) map[sorted[j].floor] = sorted[j - 1].finalPSF;
+    return map;
   });
 
   // Total visible columns (floor + stacks + optional avg)
@@ -277,33 +369,100 @@ function BlockPricingTable({ block }) {
                               backgroundColor: bg,
                               borderRight:     `1px solid ${C.cellBorder}`,
                               borderBottom:    `1px solid ${C.cellBorder}`,
+                              cursor:          unit ? 'pointer' : 'default',
                             }}
+                            onClick={() => unit && editingUnitId !== unit.id && openEdit(unit, stack.id)}
                           >
                             {unit ? (
-                              <div className="flex flex-col items-end gap-0.5">
-                                {/* PSF + badges */}
-                                <div className="flex items-center gap-1 justify-end">
-                                  {unit.isPenthouse && (
-                                    <span
-                                      className="px-1 py-px rounded leading-tight font-bold"
-                                      style={{ fontSize: 9, backgroundColor: C.phBadgeBg, color: C.phBadgeTx }}
-                                    >PH</span>
-                                  )}
-                                  {unit.isManualOverride && (
-                                    <span
-                                      className="px-1 py-px rounded leading-tight font-bold"
-                                      style={{ fontSize: 9, backgroundColor: C.mBadgeBg, color: C.mBadgeTx }}
-                                    >M</span>
-                                  )}
-                                  <span className="font-semibold tabular-nums text-gray-900">
-                                    {fmtPSF(unit.finalPSF)}
-                                  </span>
+                              editingUnitId === unit.id ? (
+                                /* ── Inline edit form ─────────────────────────── */
+                                <div className="flex flex-col gap-1" onClick={e => e.stopPropagation()}>
+                                  <div className="flex items-center gap-1">
+                                    <span style={{ fontSize: 9, color: '#9CA3AF', minWidth: 20 }}>PSF</span>
+                                    <input
+                                      autoFocus
+                                      type="number"
+                                      value={editPSF}
+                                      onChange={e => handleEditPSFChange(e.target.value)}
+                                      onKeyDown={handleEditKeyDown}
+                                      className="w-full text-right text-xs rounded px-1 py-0.5"
+                                      style={{ border: `1px solid ${C.hBorder}`, outline: 'none', minWidth: 0 }}
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span style={{ fontSize: 9, color: '#9CA3AF', minWidth: 20 }}>$</span>
+                                    <input
+                                      type="number"
+                                      value={editPrice}
+                                      onChange={e => handleEditPriceChange(e.target.value)}
+                                      onKeyDown={handleEditKeyDown}
+                                      className="w-full text-right text-xs rounded px-1 py-0.5"
+                                      style={{ border: `1px solid ${C.hBorder}`, outline: 'none', minWidth: 0 }}
+                                    />
+                                  </div>
+                                  <div className="flex justify-end gap-2 mt-0.5">
+                                    <button
+                                      className="text-gray-400 hover:text-gray-600"
+                                      style={{ fontSize: 10 }}
+                                      onClick={() => setEditingUnitId(null)}
+                                    >Esc</button>
+                                    <button
+                                      className="font-semibold text-blue-600 hover:text-blue-800"
+                                      style={{ fontSize: 10 }}
+                                      disabled={saving}
+                                      onClick={handleSaveEdit}
+                                    >{saving ? '…' : 'Save'}</button>
+                                  </div>
                                 </div>
-                                {/* Price */}
-                                <span className="tabular-nums text-gray-400" style={{ fontSize: 10 }}>
-                                  {fmtPrice(unit.finalPrice)}
-                                </span>
-                              </div>
+                              ) : (
+                                /* ── Display mode ─────────────────────────────── */
+                                <div className="relative group w-full flex flex-col items-end gap-0.5">
+                                  {unit.isManualOverride && (
+                                    <button
+                                      className="absolute top-0 left-0 opacity-0 group-hover:opacity-100 leading-none font-bold transition-opacity"
+                                      style={{ fontSize: 11, color: C.mBadgeTx, lineHeight: 1 }}
+                                      title="Reset to solver value"
+                                      disabled={resetting.has(unit.id)}
+                                      onClick={e => { e.stopPropagation(); handleReset(unit); }}
+                                    >{resetting.has(unit.id) ? '…' : '×'}</button>
+                                  )}
+                                  <div className="flex items-center gap-1 justify-end">
+                                    {unit.isPenthouse && (
+                                      <span
+                                        className="px-1 py-px rounded leading-tight font-bold"
+                                        style={{ fontSize: 9, backgroundColor: C.phBadgeBg, color: C.phBadgeTx }}
+                                      >PH</span>
+                                    )}
+                                    {unit.isManualOverride && (
+                                      <>
+                                        <svg viewBox="0 0 20 20" fill="currentColor" style={{ width: 9, height: 9, color: C.mBadgeTx, flexShrink: 0 }}>
+                                          <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
+                                        </svg>
+                                        <span
+                                          className="px-1 py-px rounded leading-tight font-bold"
+                                          style={{ fontSize: 9, backgroundColor: C.mBadgeBg, color: C.mBadgeTx }}
+                                        >M</span>
+                                      </>
+                                    )}
+                                    <span className="font-semibold tabular-nums text-gray-900">
+                                      {fmtPSF(unit.finalPSF)}
+                                    </span>
+                                  </div>
+                                  <span className="tabular-nums text-gray-400" style={{ fontSize: 10 }}>
+                                    {fmtPrice(unit.finalPrice)}
+                                  </span>
+                                  {(() => {
+                                    const prev  = prevStackPSF[i]?.[unit.floor];
+                                    if (prev == null || unit.finalPSF == null) return null;
+                                    const delta = unit.finalPSF - prev;
+                                    return (
+                                      <span className="tabular-nums" style={{ fontSize: 9, color: '#9CA3AF' }}>
+                                        {(delta >= 0 ? '+' : '-') + fmtPSF(Math.abs(delta))}
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                              )
                             ) : stackExcl ? (
                               <span className="block text-right text-gray-300" style={{ fontSize: 11 }}>—</span>
                             ) : (
@@ -373,10 +532,12 @@ export default function PricingEngine() {
   const { projectId } = useParams();
   const navigate      = useNavigate();
 
-  const [projects, setProjects] = useState([]);
-  const [project,  setProject]  = useState(null);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState(null);
+  const [projects,        setProjects]        = useState([]);
+  const [project,         setProject]         = useState(null);
+  const [loading,         setLoading]         = useState(false);
+  const [error,           setError]           = useState(null);
+  const [generateLoading, setGenerateLoading] = useState(false);
+  const [generateResult,  setGenerateResult]  = useState(null);
 
   useEffect(() => {
     fetch('/api/projects')
@@ -398,8 +559,59 @@ export default function PricingEngine() {
   const allUnits = project
     ? project.blocks.flatMap(b => b.stacks.flatMap(s => s.units || []))
     : [];
-  const projectStats = computeStats(allUnits);
-  const hasUnits     = allUnits.length > 0;
+  const projectStats        = computeStats(allUnits);
+  const hasUnits            = allUnits.length > 0;
+  const manualOverrideCount = allUnits.filter(u => u.isManualOverride).length;
+
+  function handleUnitChange(unitId, updates) {
+    setProject(prev => prev ? ({
+      ...prev,
+      blocks: prev.blocks.map(b => ({
+        ...b,
+        stacks: b.stacks.map(s => ({
+          ...s,
+          units: (s.units || []).map(u => u.id === unitId ? { ...u, ...updates } : u),
+        })),
+      })),
+    }) : prev);
+  }
+
+  async function handleAfterOverride(stackId, fromFloor) {
+    if (!projectId) return;
+    try {
+      await fetch(`/api/projects/${projectId}/recalculate-above`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ stackId, fromFloor }),
+      });
+      const projRes = await fetch(`/api/projects/${projectId}`);
+      if (projRes.ok) setProject(await projRes.json());
+    } catch {
+      // silently ignore — override is already saved, recalculation is best-effort
+    }
+  }
+
+  async function handleGenerate() {
+    if (!projectId) return;
+    setGenerateLoading(true);
+    setGenerateResult(null);
+    setError(null);
+    try {
+      const genRes = await fetch(`/api/projects/${projectId}/generate-units`, { method: 'POST' });
+      if (!genRes.ok) {
+        const errData = await genRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Generation failed');
+      }
+      const result = await genRes.json();
+      setGenerateResult(result);
+      const projRes = await fetch(`/api/projects/${projectId}`);
+      if (projRes.ok) setProject(await projRes.json());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setGenerateLoading(false);
+    }
+  }
 
   const sortedBlocks = project
     ? [...project.blocks].sort((a, b) =>
@@ -449,10 +661,26 @@ export default function PricingEngine() {
 
       {project && !loading && (
         <>
-          {/* Project name */}
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">{project.nameEn}</h2>
-            {project.nameZh && <p className="text-sm text-gray-500">{project.nameZh}</p>}
+          {/* Project name + generate */}
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">{project.nameEn}</h2>
+              {project.nameZh && <p className="text-sm text-gray-500">{project.nameZh}</p>}
+            </div>
+            <div className="flex flex-col items-end gap-1.5">
+              {manualOverrideCount > 0 && (
+                <p className="text-xs" style={{ color: '#92400E' }}>
+                  ⚠ {manualOverrideCount} unit{manualOverrideCount !== 1 ? 's have' : ' has'} manual overrides — will be preserved
+                </p>
+              )}
+              <button
+                className="btn btn-primary"
+                disabled={generateLoading}
+                onClick={handleGenerate}
+              >
+                {generateLoading ? 'Generating…' : 'Generate Pricing'}
+              </button>
+            </div>
           </div>
 
           {/* Summary metric cards */}
@@ -462,6 +690,30 @@ export default function PricingEngine() {
             <MetricCard label={t('pricing.statHighPrice')}  value={fmtPrice(projectStats.highPrice)} />
             <MetricCard label={t('pricing.statLowPrice')}   value={fmtPrice(projectStats.lowPrice)} />
           </div>
+
+          {/* Generate result banner */}
+          {generateResult && (
+            <div
+              className="card px-4 py-3 flex items-start justify-between gap-4"
+              style={{ backgroundColor: '#F0FDF4', borderColor: '#86EFAC' }}
+            >
+              <div>
+                <p className="text-sm font-semibold" style={{ color: '#166534' }}>
+                  {generateResult.totalUnits} units generated
+                  {generateResult.achievedOverallAvgPSF != null && ` · Avg PSF ${fmtPSF(generateResult.achievedOverallAvgPSF)}`}
+                  {generateResult.manualOverrideCount > 0 && ` · ${generateResult.manualOverrideCount} override${generateResult.manualOverrideCount !== 1 ? 's' : ''} preserved`}
+                </p>
+                {generateResult.correctionWarning && (
+                  <p className="text-xs mt-0.5" style={{ color: '#92400E' }}>⚠ {generateResult.correctionWarning}</p>
+                )}
+              </div>
+              <button
+                onClick={() => setGenerateResult(null)}
+                className="text-gray-400 hover:text-gray-600 flex-shrink-0"
+                style={{ fontSize: 14, lineHeight: 1 }}
+              >✕</button>
+            </div>
+          )}
 
           {/* No units yet */}
           {!hasUnits && (
@@ -475,7 +727,13 @@ export default function PricingEngine() {
           {hasUnits && (
             <div className="space-y-4">
               {sortedBlocks.map(block => (
-                <BlockPricingTable key={block.id} block={block} />
+                <BlockPricingTable
+                  key={block.id}
+                  block={block}
+                  onUnitChange={handleUnitChange}
+                  onAfterOverride={handleAfterOverride}
+                  roundingUnit={project.pricingParameters?.roundingUnit ?? project.roundingUnit ?? 100}
+                />
               ))}
             </div>
           )}

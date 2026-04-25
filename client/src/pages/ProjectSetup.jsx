@@ -1464,7 +1464,7 @@ function AddRankPanel({ projectId, onSaved, onCancel }) {
 }
 
 // ─── RankCard ─────────────────────────────────────────────────────────────────
-function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
+function RankCard({ rank, blocks = [], onUpdate, onDelete, onDuplicated }) {
   const { t } = useTranslation();
   const [expanded, setExpanded]   = useState(false);
   const [editing, setEditing]     = useState(false);
@@ -1494,17 +1494,46 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
     }
   }, [rank, editing]);
 
+  // ── Floor coverage helpers ──────────────────────────────────────────────────
+  const minFloor = blocks.length > 0 ? Math.min(...blocks.map(b => b.startingFloor)) : null;
+  const maxFloor = blocks.length > 0 ? Math.max(...blocks.map(b => b.startingFloor + b.totalStoreys - 1)) : null;
+
+  function checkCoverage(increments) {
+    if (minFloor == null || maxFloor == null) return [];
+    const sorted = [...increments].sort((a, b) => a.fromFloor - b.fromFloor);
+    const uncovered = [];
+    let expected = minFloor;
+    for (const band of sorted) {
+      for (let f = expected; f < band.fromFloor; f++) uncovered.push(f);
+      expected = Math.max(expected, band.toFloor + 1);
+    }
+    for (let f = expected; f <= maxFloor; f++) uncovered.push(f);
+    return uncovered;
+  }
+
+  const coverageErrors = checkCoverage(rank.floorIncrements || []);
+  const bandCount      = rank.floorIncrements?.length ?? 0;
+
   function onChange(e) {
     const { name, value, type, checked } = e.target;
     setEditForm(p => {
       const next = { ...p, [name]: type === 'checkbox' ? checked : value };
-      // auto-uncheck lock whenever basePSF is cleared or set to zero
       if (name === 'basePSF' && !(Number(value) > 0)) next.basePSFLocked = false;
       return next;
     });
   }
 
   async function saveRank() {
+    if ((rank.floorIncrements?.length ?? 0) > 0) {
+      const uncovered = checkCoverage(rank.floorIncrements || []);
+      if (uncovered.length > 0) {
+        const display = uncovered.length > 6
+          ? `${uncovered.slice(0, 6).join(', ')} … and ${uncovered.length - 6} more`
+          : uncovered.join(', ');
+        setError(`Floor bands have gaps — floors not covered: ${display}`);
+        return;
+      }
+    }
     setSaving(true); setError(null);
     try {
       const body = {
@@ -1582,8 +1611,6 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
   function handleIncrementDeleted(fiId) {
     onUpdate({ ...rank, floorIncrements: (rank.floorIncrements || []).filter(fi => fi.id !== fiId) });
   }
-
-  const bandCount = rank.floorIncrements?.length ?? 0;
 
   return (
     <div className="border border-gray-200 rounded-xl bg-white overflow-hidden shadow-sm">
@@ -1745,6 +1772,16 @@ function RankCard({ rank, onUpdate, onDelete, onDuplicated }) {
               onClick={() => { setDuplicating(false); setDupError(null); }}
             >{t('common.cancel')}</button>
           </div>
+        </div>
+      )}
+
+      {/* ── Validation banners ───────────────────────────────────────────── */}
+      {bandCount > 0 && coverageErrors.length > 0 && (
+        <div className="px-4 py-2 text-xs text-red-700 bg-red-50 border-t border-red-200">
+          ⚠ Floor bands incomplete — floors not covered:{' '}
+          {coverageErrors.length > 8
+            ? `${coverageErrors.slice(0, 8).join(', ')} and ${coverageErrors.length - 8} more`
+            : coverageErrors.join(', ')}
         </div>
       )}
 
@@ -2158,6 +2195,7 @@ export default function ProjectSetup() {
                 <RankCard
                   key={rank.id}
                   rank={rank}
+                  blocks={blocks}
                   onUpdate={handleRankUpdated}
                   onDelete={handleRankDeleted}
                   onDuplicated={handleRankAdded}

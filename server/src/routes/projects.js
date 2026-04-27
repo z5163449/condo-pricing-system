@@ -196,6 +196,21 @@ router.post('/:id/generate-units', async (req, res, next) => {
       }
     }
 
+    // ── Full reset: clear all custom stack adjustments and manual overrides ─────
+    await prisma.stack.updateMany({
+      where: { block: { projectId } },
+      data: {
+        stackStartingPSF:       null,
+        stackStartingPSFLocked: false,
+        stackIncrements:        null,
+        stackIncrementsLocked:  false,
+      },
+    });
+    await prisma.unit.updateMany({
+      where: { stack: { block: { projectId } } },
+      data: { isManualOverride: false },
+    });
+
     // ── Helpers ───────────────────────────────────────────────────────────────
     function parseExcl(str) {
       try { return new Set(JSON.parse(str || '[]')); } catch { return new Set(); }
@@ -420,8 +435,8 @@ router.post('/:id/generate-units', async (req, res, next) => {
             floor,
             sizeSqft,
             isPenthouse,
-            calculatedPSF:    calcPSFRounded,
-            calculatedPrice:  calcPrice,
+            calculatedPSF:    finalPSF,
+            calculatedPrice:  finalPrice,
             finalPSF,
             finalPrice,
             isManualOverride: false,
@@ -480,9 +495,11 @@ router.post('/:id/generate-units', async (req, res, next) => {
 
       for (const unit of unitsToCreate) {
         if (unit.isManualOverride || lockedStackIds.has(unit.stackId)) continue;
-        const newPrice  = Math.round((unit.finalPSF + diff) * unit.sizeSqft / roundingUnit) * roundingUnit;
-        unit.finalPrice = newPrice;
-        unit.finalPSF   = newPrice / unit.sizeSqft;
+        const newPrice       = Math.round((unit.finalPSF + diff) * unit.sizeSqft / roundingUnit) * roundingUnit;
+        unit.finalPrice      = newPrice;
+        unit.finalPSF        = newPrice / unit.sizeSqft;
+        unit.calculatedPSF   = unit.finalPSF;
+        unit.calculatedPrice = unit.finalPrice;
       }
 
       iteration++;
@@ -545,6 +562,54 @@ router.post('/:id/generate-units', async (req, res, next) => {
       byBlock,
       correctionWarning,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── PATCH /api/projects/:id/stacks/bulk-update ──────────────────────────────
+// Update stackStartingPSF / stackIncrements on all stacks matching rankId + typeCode.
+router.patch('/:id/stacks/bulk-update', async (req, res, next) => {
+  try {
+    const { rankId, typeCode, stackStartingPSF, stackStartingPSFLocked, stackIncrements, stackIncrementsLocked } = req.body;
+    if (!rankId || !typeCode) {
+      return res.status(400).json({ error: 'rankId and typeCode are required' });
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: req.params.id },
+      include: {
+        blocks: {
+          include: {
+            stacks: { where: { rankId, unitTypeCode: typeCode } },
+          },
+        },
+      },
+    });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const stackIds = project.blocks.flatMap(b => b.stacks.map(s => s.id));
+    if (stackIds.length === 0) {
+      return res.json({ updatedCount: 0, stackIds: [] });
+    }
+
+    const incrementsValue = stackIncrements == null ? null
+      : typeof stackIncrements === 'string' ? stackIncrements
+      : JSON.stringify(stackIncrements);
+
+    await prisma.stack.updateMany({
+      where: { id: { in: stackIds } },
+      data: {
+        ...(stackStartingPSF       !== undefined && {
+          stackStartingPSF: stackStartingPSF != null ? Number(stackStartingPSF) : null,
+        }),
+        ...(stackStartingPSFLocked !== undefined && { stackStartingPSFLocked: Boolean(stackStartingPSFLocked) }),
+        ...(stackIncrements        !== undefined && { stackIncrements: incrementsValue }),
+        ...(stackIncrementsLocked  !== undefined && { stackIncrementsLocked: Boolean(stackIncrementsLocked) }),
+      },
+    });
+
+    res.json({ updatedCount: stackIds.length, stackIds });
   } catch (err) {
     next(err);
   }

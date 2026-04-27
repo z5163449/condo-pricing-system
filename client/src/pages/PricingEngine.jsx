@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import StackIncrementPanel from './StackIncrementPanel';
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
@@ -185,7 +186,7 @@ function SummaryPanel({ unitsRich, pricingParameters }) {
 }
 
 // ─── BlockPricingTable ────────────────────────────────────────────────────────
-function BlockPricingTable({ block, onUnitChange, onAfterOverride, roundingUnit = 100 }) {
+function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick, roundingUnit = 100 }) {
   const { t } = useTranslation();
   const [collapsed,      setCollapsed]      = useState(false);
   const [showFloorAvg,   setShowFloorAvg]   = useState(true);
@@ -405,17 +406,34 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, roundingUnit 
                   {sortedStacks.map((stack, i) => (
                     <th
                       key={stack.id}
-                      className="px-3 py-2 text-center font-medium"
-                      style={{ ...headerCell, minWidth: 112, borderRight: i === sortedStacks.length - 1 && !showFloorAvg ? 'none' : `1px solid ${C.hBorder}` }}
+                      className="px-3 py-2 text-center font-medium group"
+                      style={{
+                        ...headerCell,
+                        minWidth: 112,
+                        borderRight: i === sortedStacks.length - 1 && !showFloorAvg ? 'none' : `1px solid ${C.hBorder}`,
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => onStackClick?.(stack)}
                     >
                       <div className="font-semibold" style={{ color: C.hText }}>
                         #{String(stack.stackNumber).padStart(2, '0')}&thinsp;{stack.unitTypeCode}
+                        {(stack.stackIncrementsLocked === true || stack.stackStartingPSFLocked === true) && (
+                          <span style={{ background: '#1d4ed8', color: 'white',
+                            fontSize: '9px', padding: '1px 5px',
+                            borderRadius: '3px', marginLeft: '4px' }}>
+                            Custom
+                          </span>
+                        )}
                       </div>
                       <div className="font-normal text-[11px]" style={{ color: C.hText, opacity: 0.75 }}>
                         {stack.bedroomType}
                       </div>
                       <div className="font-normal text-[11px]" style={{ color: C.hText, opacity: 0.55 }}>
                         {stack.standardSizeSqft?.toLocaleString()} sqft
+                      </div>
+                      <div className="font-normal text-[10px] mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                        style={{ color: '#6366F1' }}>
+                        ✎ Edit
                       </div>
                     </th>
                   ))}
@@ -659,6 +677,24 @@ export default function PricingEngine() {
   const [error,           setError]           = useState(null);
   const [generateLoading, setGenerateLoading] = useState(false);
   const [generateResult,  setGenerateResult]  = useState(null);
+  const [panelOpen,       setPanelOpen]       = useState(false);
+  const [selectedStack,   setSelectedStack]   = useState(null);
+
+  function openStackPanel(stack) {
+    console.log('Opening panel for stack:', stack);
+    setSelectedStack(stack);
+    setPanelOpen(true);
+  }
+
+  async function fetchProject() {
+    if (!projectId) return;
+    try {
+      const res = await fetch(`/api/projects/${projectId}`);
+      if (res.ok) setProject(await res.json());
+    } catch {
+      // silently ignore
+    }
+  }
 
   useEffect(() => {
     fetch('/api/projects')
@@ -857,6 +893,7 @@ export default function PricingEngine() {
                   block={block}
                   onUnitChange={handleUnitChange}
                   onAfterOverride={handleAfterOverride}
+                  onStackClick={openStackPanel}
                   roundingUnit={project.pricingParameters?.roundingUnit ?? project.roundingUnit ?? 100}
                 />
               ))}
@@ -885,6 +922,15 @@ export default function PricingEngine() {
             </div>
           )}
         </>
+      )}
+
+      {panelOpen && selectedStack && (
+        <StackIncrementPanel
+          stack={selectedStack}
+          project={project}
+          onClose={() => { setPanelOpen(false); setSelectedStack(null); }}
+          onApply={fetchProject}
+        />
       )}
     </div>
   );

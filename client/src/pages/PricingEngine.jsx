@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import StackIncrementPanel from './StackIncrementPanel';
@@ -43,6 +43,12 @@ function fmtPSF(v) {
 function fmtPrice(v) {
   if (v == null || !isFinite(v)) return '—';
   return '$' + Math.round(v).toLocaleString();
+}
+
+function fmtPct(current, projected) {
+  if (current == null || projected == null || current === 0) return null;
+  const pct = ((projected - current) / current) * 100;
+  return (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
 }
 
 function computeStats(units) {
@@ -186,7 +192,7 @@ function SummaryPanel({ unitsRich, pricingParameters }) {
 }
 
 // ─── BlockPricingTable ────────────────────────────────────────────────────────
-function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick, roundingUnit = 100 }) {
+function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick, roundingUnit = 100, readOnly = false }) {
   const { t } = useTranslation();
   const [collapsed,      setCollapsed]      = useState(false);
   const [showFloorAvg,   setShowFloorAvg]   = useState(true);
@@ -413,7 +419,7 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
                         borderRight: i === sortedStacks.length - 1 && !showFloorAvg ? 'none' : `1px solid ${C.hBorder}`,
                         cursor: 'pointer',
                       }}
-                      onClick={() => onStackClick?.(stack)}
+                      onClick={() => !readOnly && onStackClick?.(stack)}
                     >
                       <div className="font-semibold" style={{ color: C.hText }}>
                         #{String(stack.stackNumber).padStart(2, '0')}&thinsp;{stack.unitTypeCode}
@@ -431,10 +437,12 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
                       <div className="font-normal text-[11px]" style={{ color: C.hText, opacity: 0.55 }}>
                         {stack.standardSizeSqft?.toLocaleString()} sqft
                       </div>
-                      <div className="font-normal text-[10px] mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                        style={{ color: '#6366F1' }}>
-                        ✎ Edit
-                      </div>
+                      {!readOnly && (
+                        <div className="font-normal text-[10px] mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                          style={{ color: '#6366F1' }}>
+                          ✎ Edit
+                        </div>
+                      )}
                     </th>
                   ))}
 
@@ -508,9 +516,9 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
                               backgroundColor: bg,
                               borderRight:     `1px solid ${C.cellBorder}`,
                               borderBottom:    `1px solid ${C.cellBorder}`,
-                              cursor:          unit ? 'pointer' : 'default',
+                              cursor: unit && !readOnly ? 'pointer' : 'default',
                             }}
-                            onClick={() => unit && editingUnitId !== unit.id && openEdit(unit, stack.id)}
+                            onClick={() => !readOnly && unit && editingUnitId !== unit.id && openEdit(unit, stack.id)}
                           >
                             {unit ? (
                               editingUnitId === unit.id ? (
@@ -665,6 +673,295 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
   );
 }
 
+// ─── AdjustmentsPanel ────────────────────────────────────────────────────────
+const ADJUST_SCOPES = [
+  { value: 'all',         label: 'All Units' },
+  { value: 'bedroomType', label: 'Bedroom Type' },
+  { value: 'block',       label: 'Block' },
+  { value: 'rank',        label: 'Rank' },
+];
+
+function AdjustmentsPanel({ project, onClose, onApply }) {
+  const [scope,      setScope]      = useState('all');
+  const [pcts,       setPcts]       = useState({});
+  const [previewing, setPreviewing] = useState(false);
+  const [preview,    setPreview]    = useState(null);
+  const [applying,   setApplying]   = useState(false);
+  const [error,      setError]      = useState(null);
+  const previewTimer = useRef(null);
+
+  // Reset inputs and preview whenever scope changes
+  useEffect(() => {
+    setPcts({});
+    setPreview(null);
+    setError(null);
+  }, [scope]);
+
+  // Derived data (stable — project prop doesn't change)
+  const bedroomTypes = [...new Set(
+    project.blocks.flatMap(b => b.stacks.map(s => s.bedroomType)).filter(Boolean)
+  )].sort();
+  const sortedBlocks = [...project.blocks].sort((a, b) =>
+    a.blockName.localeCompare(b.blockName, undefined, { numeric: true })
+  );
+  const sortedRanks = [...(project.ranks ?? [])].sort((a, b) => (a.rankNumber ?? 0) - (b.rankNumber ?? 0));
+
+  function scopeRows() {
+    switch (scope) {
+      case 'all':         return [{ key: 'all', label: 'All Units' }];
+      case 'bedroomType': return bedroomTypes.map(br => ({ key: br, label: br }));
+      case 'block':       return sortedBlocks.map(b => ({ key: b.id, label: b.blockName }));
+      case 'rank':        return sortedRanks.map(r => ({ key: r.id, label: `Rank ${r.rankNumber} · ${r.labelEn}` }));
+      default:            return [];
+    }
+  }
+
+  function buildAdjustments() {
+    const adj = {};
+    for (const { key } of scopeRows()) {
+      const v = parseFloat(pcts[key] ?? '');
+      if (isFinite(v) && v !== 0) adj[key] = v;
+    }
+    return adj;
+  }
+
+  async function runPreview() {
+    const adjustments = buildAdjustments();
+    if (Object.keys(adjustments).length === 0) { setPreview(null); return; }
+    setPreviewing(true); setError(null);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/adjust/preview`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ scope, adjustments }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Preview failed'); }
+      setPreview(await res.json());
+    } catch (e) {
+      setError(e.message);
+      setPreview(null);
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  // Debounced auto-preview whenever pcts changes (scope changes reset pcts, which triggers this)
+  useEffect(() => {
+    clearTimeout(previewTimer.current);
+    const hasValue = scopeRows().some(({ key }) => {
+      const v = parseFloat(pcts[key] ?? '');
+      return isFinite(v) && v !== 0;
+    });
+    if (!hasValue) { setPreview(null); return; }
+    previewTimer.current = setTimeout(runPreview, 300);
+    return () => clearTimeout(previewTimer.current);
+  }, [pcts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleApply() {
+    const adjustments = buildAdjustments();
+    if (Object.keys(adjustments).length === 0) { setError('Enter at least one non-zero percentage'); return; }
+    setApplying(true); setError(null);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/adjust`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ scope, adjustments }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Adjustment failed'); }
+      await res.json();
+      setPreview(null);
+      setPcts({});
+      onApply?.();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  const rows = scopeRows();
+
+  // ── Preview table helpers ─────────────────────────────────────────────────
+  function PreviewRow({ label, currentPSF, projectedPSF, bold }) {
+    const pctStr  = fmtPct(currentPSF, projectedPSF);
+    const changed = pctStr !== null;
+    const pos     = pctStr?.startsWith('+');
+    return (
+      <tr style={{ borderBottom: '1px solid #F3F4F6', fontWeight: bold ? 600 : 400, background: bold ? '#F8FAFC' : undefined }}>
+        <td style={{ padding: bold ? '5px 6px' : '4px 6px 4px 14px', color: '#374151' }}>{label}</td>
+        <td style={{ padding: bold ? '5px 6px' : '4px 6px', textAlign: 'right', color: '#9CA3AF', fontVariantNumeric: 'tabular-nums' }}>
+          {fmtPSF(currentPSF)}
+        </td>
+        <td style={{ padding: bold ? '5px 6px' : '4px 6px', textAlign: 'right', color: changed ? '#0C447C' : '#374151', fontWeight: changed ? 600 : undefined, fontVariantNumeric: 'tabular-nums' }}>
+          {fmtPSF(projectedPSF)}
+        </td>
+        <td style={{ padding: bold ? '5px 6px' : '4px 6px', textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+          color: !changed ? '#D1D5DB' : pos ? '#16A34A' : '#DC2626' }}>
+          {pctStr ?? '—'}
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed', top: 0, right: 0, bottom: 0,
+        width: 420,
+        background: '#fff',
+        boxShadow: '-4px 0 32px rgba(0,0,0,0.14)',
+        zIndex: 100,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Header */}
+      <div style={{ background: '#E6F1FB', borderBottom: '1px solid #B5D4F4', padding: '14px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#0C447C' }}>Adjust Pricing</div>
+            <div style={{ fontSize: 12, color: '#4B7BA8', marginTop: 3 }}>
+              Apply % shift to final prices. Solver values are not changed.
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ color: '#6B7280', fontSize: 20, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}
+          >✕</button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+        {/* Scope pills */}
+        <section>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>Scope</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {ADJUST_SCOPES.map(s => (
+              <button
+                key={s.value}
+                type="button"
+                onClick={() => setScope(s.value)}
+                style={{
+                  padding: '5px 12px', borderRadius: 6, fontSize: 12,
+                  fontWeight: scope === s.value ? 600 : 400,
+                  border:    scope === s.value ? '1.5px solid #0C447C' : '1px solid #D1D5DB',
+                  background: scope === s.value ? '#E6F1FB' : '#F9FAFB',
+                  color:     scope === s.value ? '#0C447C' : '#374151',
+                  cursor: 'pointer',
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Percentage inputs */}
+        <section>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>Adjustment (%)</div>
+          <p style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 10 }}>
+            Positive = increase · Negative = decrease · All units in scope are affected.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {rows.map(({ key, label }) => (
+              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ flex: 1, fontSize: 13, color: '#374151', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {label}
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={pcts[key] ?? ''}
+                    placeholder="0"
+                    onChange={e => setPcts(prev => ({ ...prev, [key]: e.target.value }))}
+                    className="input text-right tabular-nums"
+                    style={{ width: 76, fontSize: 13 }}
+                  />
+                  <span style={{ fontSize: 12, color: '#9CA3AF' }}>%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Preview table */}
+        {(preview || previewing) && (
+          <section>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              Preview
+              {previewing && <span style={{ fontSize: 11, color: '#9CA3AF', fontWeight: 400 }}>updating…</span>}
+            </div>
+            {preview && (
+              <>
+                <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+                      <th style={{ textAlign: 'left',  padding: '3px 6px', fontWeight: 600, color: '#6B7280' }}>Group</th>
+                      <th style={{ textAlign: 'right', padding: '3px 6px', fontWeight: 600, color: '#6B7280' }}>Current</th>
+                      <th style={{ textAlign: 'right', padding: '3px 6px', fontWeight: 600, color: '#6B7280' }}>Projected</th>
+                      <th style={{ textAlign: 'right', padding: '3px 6px', fontWeight: 600, color: '#6B7280' }}>Δ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <PreviewRow
+                      label="Overall"
+                      currentPSF={preview.overall.currentAvgPSF}
+                      projectedPSF={preview.overall.projectedAvgPSF}
+                      bold
+                    />
+                    {preview.byBedroomType.map(({ type, currentPSF, projectedPSF }) => (
+                      <PreviewRow key={type} label={type} currentPSF={currentPSF} projectedPSF={projectedPSF} />
+                    ))}
+                    {preview.byBlock.length > 1 && preview.byBlock.map(({ blockName, currentPSF, projectedPSF }) => (
+                      <PreviewRow key={blockName} label={`Blk ${blockName}`} currentPSF={currentPSF} projectedPSF={projectedPSF} />
+                    ))}
+                  </tbody>
+                </table>
+                <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 6 }}>
+                  {preview.affectedCount} of {preview.totalCount} units affected
+                </p>
+              </>
+            )}
+          </section>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#DC2626' }}>
+            {error}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{ borderTop: '1px solid #E5E7EB', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 10, background: '#FAFAFA' }}>
+        <button onClick={onClose} className="btn" style={{ fontSize: 13 }}>Cancel</button>
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={runPreview}
+          disabled={previewing || Object.keys(buildAdjustments()).length === 0}
+          className="btn"
+          style={{ fontSize: 13 }}
+        >
+          {previewing ? 'Previewing…' : 'Preview'}
+        </button>
+        <button
+          onClick={handleApply}
+          disabled={applying || preview === null || previewing}
+          className="btn btn-primary"
+          style={{ fontSize: 13 }}
+        >
+          {applying ? 'Applying…' : 'Apply'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── PricingEngine ────────────────────────────────────────────────────────────
 export default function PricingEngine() {
   const { t }         = useTranslation();
@@ -675,10 +972,27 @@ export default function PricingEngine() {
   const [project,         setProject]         = useState(null);
   const [loading,         setLoading]         = useState(false);
   const [error,           setError]           = useState(null);
-  const [generateLoading, setGenerateLoading] = useState(false);
-  const [generateResult,  setGenerateResult]  = useState(null);
-  const [panelOpen,       setPanelOpen]       = useState(false);
-  const [selectedStack,   setSelectedStack]   = useState(null);
+  const [generateLoading,  setGenerateLoading]  = useState(false);
+  const [generateResult,   setGenerateResult]   = useState(null);
+  const [panelOpen,        setPanelOpen]        = useState(false);
+  const [selectedStack,    setSelectedStack]    = useState(null);
+  const [adjustPanelOpen,  setAdjustPanelOpen]  = useState(false);
+
+  // ── Scenario state ──────────────────────────────────────────────────────────
+  const [scenarios,        setScenarios]        = useState([]);
+  const [activeScenarioId, setActiveScenarioId] = useState(null);
+  const [isReadOnly,       setIsReadOnly]       = useState(false);
+  const [scenarioLoading,  setScenarioLoading]  = useState(false);
+  const [scenarioError,    setScenarioError]    = useState(null);
+  // Modals
+  const [saveNewOpen,      setSaveNewOpen]      = useState(false);
+  const [saveNewName,      setSaveNewName]      = useState('');
+  const [saveNewNotes,     setSaveNewNotes]     = useState('');
+  const [saveNewSaving,    setSaveNewSaving]    = useState(false);
+  const [lockConfirmOpen,  setLockConfirmOpen]  = useState(false);
+  const [lockSaving,       setLockSaving]       = useState(false);
+  const [deleteConfirmOpen,setDeleteConfirmOpen]= useState(false);
+  const [deleteSaving,     setDeleteSaving]     = useState(false);
 
   function openStackPanel(stack) {
     console.log('Opening panel for stack:', stack);
@@ -694,6 +1008,14 @@ export default function PricingEngine() {
     } catch {
       // silently ignore
     }
+  }
+
+  async function fetchScenarios() {
+    if (!projectId) { setScenarios([]); return; }
+    try {
+      const res = await fetch(`/api/projects/${projectId}/scenarios`);
+      if (res.ok) setScenarios(await res.json());
+    } catch { /* ignore */ }
   }
 
   useEffect(() => {
@@ -712,6 +1034,14 @@ export default function PricingEngine() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }, [projectId]);
+
+  // Fetch scenarios when project changes; reset active scenario state
+  useEffect(() => {
+    setActiveScenarioId(null);
+    setIsReadOnly(false);
+    setScenarioError(null);
+    fetchScenarios();
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allUnits = project
     ? project.blocks.flatMap(b => b.stacks.flatMap(s => s.units || []))
@@ -752,6 +1082,137 @@ export default function PricingEngine() {
     }
   }
 
+  // ── Scenario handlers ───────────────────────────────────────────────────────
+
+  async function handleScenarioChange(scenarioId) {
+    setScenarioError(null);
+    if (!scenarioId) {
+      setActiveScenarioId(null);
+      setIsReadOnly(false);
+      await fetchProject();
+      return;
+    }
+    const scenario = scenarios.find(s => s.id === scenarioId);
+    if (!scenario) return;
+    setScenarioLoading(true);
+    try {
+      if (scenario.isLocked) {
+        const res = await fetch(`/api/scenarios/${scenarioId}`);
+        if (!res.ok) throw new Error('Failed to load scenario');
+        const data = await res.json();
+        const snapMap = new Map(data.snapshots.map(s => [s.unitId, s]));
+        setProject(prev => ({
+          ...prev,
+          blocks: prev.blocks.map(b => ({
+            ...b,
+            stacks: b.stacks.map(s => ({
+              ...s,
+              units: (s.units || []).map(u => {
+                const snap = snapMap.get(u.id);
+                return snap
+                  ? { ...u, finalPSF: snap.finalPSF, finalPrice: snap.finalPrice, isManualOverride: snap.isManualOverride }
+                  : u;
+              }),
+            })),
+          })),
+        }));
+        setActiveScenarioId(scenarioId);
+        setIsReadOnly(true);
+      } else {
+        const res = await fetch(`/api/scenarios/${scenarioId}/restore`, { method: 'POST' });
+        if (!res.ok) throw new Error('Restore failed');
+        await fetchProject();
+        setActiveScenarioId(scenarioId);
+        setIsReadOnly(false);
+      }
+    } catch (e) {
+      setScenarioError(e.message);
+    } finally {
+      setScenarioLoading(false);
+    }
+  }
+
+  async function handleSaveAsNew() {
+    if (!saveNewName.trim()) return;
+    setSaveNewSaving(true);
+    setScenarioError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/scenarios`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ name: saveNewName.trim(), notes: saveNewNotes.trim() || null }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Save failed'); }
+      const newScenario = await res.json();
+      await fetchScenarios();
+      setActiveScenarioId(newScenario.id);
+      setIsReadOnly(false);
+      setSaveNewOpen(false);
+      setSaveNewName('');
+      setSaveNewNotes('');
+    } catch (e) {
+      setScenarioError(e.message);
+    } finally {
+      setSaveNewSaving(false);
+    }
+  }
+
+  async function handleSaveToCurrent() {
+    if (!activeScenarioId || isReadOnly) return;
+    setScenarioLoading(true);
+    setScenarioError(null);
+    try {
+      const res = await fetch(`/api/scenarios/${activeScenarioId}/save`, { method: 'POST' });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Save failed'); }
+      await fetchScenarios();
+    } catch (e) {
+      setScenarioError(e.message);
+    } finally {
+      setScenarioLoading(false);
+    }
+  }
+
+  async function handleLockScenario() {
+    if (!activeScenarioId) return;
+    setLockSaving(true);
+    setScenarioError(null);
+    try {
+      const res = await fetch(`/api/scenarios/${activeScenarioId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ isLocked: true }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Lock failed'); }
+      await fetchScenarios();
+      setIsReadOnly(true);
+      setLockConfirmOpen(false);
+    } catch (e) {
+      setScenarioError(e.message);
+    } finally {
+      setLockSaving(false);
+    }
+  }
+
+  async function handleDeleteScenario() {
+    if (!activeScenarioId) return;
+    setDeleteSaving(true);
+    setScenarioError(null);
+    try {
+      const res = await fetch(`/api/scenarios/${activeScenarioId}`, { method: 'DELETE' });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Delete failed'); }
+      setActiveScenarioId(null);
+      setIsReadOnly(false);
+      await Promise.all([fetchScenarios(), fetchProject()]);
+      setDeleteConfirmOpen(false);
+    } catch (e) {
+      setScenarioError(e.message);
+    } finally {
+      setDeleteSaving(false);
+    }
+  }
+
+  const activeScenario = scenarios.find(s => s.id === activeScenarioId) ?? null;
+
   async function handleGenerate() {
     if (!projectId) return;
     setGenerateLoading(true);
@@ -765,7 +1226,13 @@ export default function PricingEngine() {
       }
       const result = await genRes.json();
       setGenerateResult(result);
-      const projRes = await fetch(`/api/projects/${projectId}`);
+      // Generate creates fresh unit IDs — reset scenario state and reload
+      setActiveScenarioId(null);
+      setIsReadOnly(false);
+      const [projRes] = await Promise.all([
+        fetch(`/api/projects/${projectId}`),
+        fetchScenarios(),
+      ]);
       if (projRes.ok) setProject(await projRes.json());
     } catch (e) {
       setError(e.message);
@@ -828,21 +1295,113 @@ export default function PricingEngine() {
               <h2 className="text-lg font-semibold text-gray-900">{project.nameEn}</h2>
               {project.nameZh && <p className="text-sm text-gray-500">{project.nameZh}</p>}
             </div>
-            <div className="flex flex-col items-end gap-1.5">
-              {manualOverrideCount > 0 && (
-                <p className="text-xs" style={{ color: '#92400E' }}>
-                  ⚠ {manualOverrideCount} unit{manualOverrideCount !== 1 ? 's have' : ' has'} manual overrides — will be preserved
-                </p>
-              )}
-              <button
-                className="btn btn-primary"
-                disabled={generateLoading}
-                onClick={handleGenerate}
+            {!isReadOnly && (
+              <div className="flex flex-col items-end gap-1.5">
+                {manualOverrideCount > 0 && (
+                  <p className="text-xs" style={{ color: '#92400E' }}>
+                    ⚠ {manualOverrideCount} unit{manualOverrideCount !== 1 ? 's have' : ' has'} manual overrides — will be preserved
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  {hasUnits && (
+                    <button className="btn" onClick={() => setAdjustPanelOpen(true)}>
+                      Adjust Pricing
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-primary"
+                    disabled={generateLoading}
+                    onClick={handleGenerate}
+                  >
+                    {generateLoading ? 'Generating…' : 'Generate Pricing'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Scenario toolbar */}
+          {hasUnits && (
+            <div className="card py-2.5 px-4 flex flex-wrap items-center gap-3">
+              <span className="text-sm font-medium text-gray-500">Scenario:</span>
+              <select
+                className="input text-sm"
+                style={{ minWidth: 200 }}
+                value={activeScenarioId ?? ''}
+                onChange={e => handleScenarioChange(e.target.value || null)}
+                disabled={scenarioLoading}
               >
-                {generateLoading ? 'Generating…' : 'Generate Pricing'}
+                <option value="">— Working state —</option>
+                {scenarios.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.isLocked ? '🔒 ' : ''}{s.name}{s.isBase ? '' : ''}
+                  </option>
+                ))}
+              </select>
+
+              {scenarioLoading && (
+                <span className="text-xs text-gray-400">Loading…</span>
+              )}
+
+              <div className="flex gap-2 ml-auto flex-wrap">
+                <button
+                  className="btn text-sm"
+                  onClick={() => { setSaveNewName(''); setSaveNewNotes(''); setSaveNewOpen(true); }}
+                  disabled={scenarioLoading}
+                  title="Save current pricing as a new named scenario"
+                >
+                  Save as New
+                </button>
+                <button
+                  className="btn text-sm"
+                  onClick={handleSaveToCurrent}
+                  disabled={!activeScenarioId || isReadOnly || scenarioLoading}
+                  title="Overwrite this scenario with current live pricing"
+                >
+                  Save to Current
+                </button>
+                <button
+                  className="btn text-sm"
+                  onClick={() => setLockConfirmOpen(true)}
+                  disabled={!activeScenarioId || isReadOnly || scenarioLoading}
+                  title="Lock this scenario permanently"
+                >
+                  🔒 Lock
+                </button>
+                <button
+                  className="btn text-sm"
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  disabled={!activeScenarioId || isReadOnly || scenarioLoading}
+                  style={{ color: '#DC2626' }}
+                  title="Delete this scenario"
+                >
+                  Delete
+                </button>
+              </div>
+
+              {scenarioError && (
+                <p className="w-full text-xs" style={{ color: '#DC2626' }}>{scenarioError}</p>
+              )}
+            </div>
+          )}
+
+          {/* Read-only banner */}
+          {isReadOnly && activeScenario && (
+            <div
+              className="card px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+              style={{ backgroundColor: '#FFFBEB', borderColor: '#FCD34D' }}
+            >
+              <p className="text-sm" style={{ color: '#92400E' }}>
+                📌 Viewing locked scenario: <strong>{activeScenario.name}</strong> — Read only. Switch to working state to make changes.
+              </p>
+              <button
+                className="btn text-sm flex-shrink-0"
+                onClick={() => handleScenarioChange(null)}
+              >
+                Back to Working State
               </button>
             </div>
-          </div>
+          )}
 
           {/* Summary panel */}
           {hasUnits && (
@@ -895,6 +1454,7 @@ export default function PricingEngine() {
                   onAfterOverride={handleAfterOverride}
                   onStackClick={openStackPanel}
                   roundingUnit={project.pricingParameters?.roundingUnit ?? project.roundingUnit ?? 100}
+                  readOnly={isReadOnly}
                 />
               ))}
             </div>
@@ -931,6 +1491,173 @@ export default function PricingEngine() {
           onClose={() => { setPanelOpen(false); setSelectedStack(null); }}
           onApply={fetchProject}
         />
+      )}
+
+      {adjustPanelOpen && project && (
+        <AdjustmentsPanel
+          project={project}
+          onClose={() => setAdjustPanelOpen(false)}
+          onApply={fetchProject}
+        />
+      )}
+
+      {/* ── Save as New modal ──────────────────────────────────────────────── */}
+      {saveNewOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onClick={() => !saveNewSaving && setSaveNewOpen(false)}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 12, width: 420,
+              boxShadow: '0 8px 40px rgba(0,0,0,0.18)', padding: '24px',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 style={{ fontWeight: 700, fontSize: 16, color: '#111827', marginBottom: 4 }}>
+              Save as New Scenario
+            </h3>
+            <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 18 }}>
+              A snapshot of the current live pricing will be saved under this name.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>
+                  Name <span style={{ color: '#DC2626' }}>*</span>
+                </label>
+                <input
+                  autoFocus
+                  className="input w-full"
+                  style={{ fontSize: 14 }}
+                  placeholder="e.g. Launch pricing v1"
+                  value={saveNewName}
+                  onChange={e => setSaveNewName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSaveAsNew(); if (e.key === 'Escape') setSaveNewOpen(false); }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>
+                  Notes <span style={{ fontSize: 11, fontWeight: 400, color: '#9CA3AF' }}>(optional)</span>
+                </label>
+                <textarea
+                  className="input w-full"
+                  style={{ fontSize: 13, resize: 'vertical', minHeight: 64 }}
+                  placeholder="What changed in this version…"
+                  value={saveNewNotes}
+                  onChange={e => setSaveNewNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            {scenarioError && (
+              <p style={{ fontSize: 12, color: '#DC2626', marginTop: 10 }}>{scenarioError}</p>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+              <button className="btn" onClick={() => setSaveNewOpen(false)} disabled={saveNewSaving}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleSaveAsNew}
+                disabled={saveNewSaving || !saveNewName.trim()}
+              >
+                {saveNewSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Lock confirm modal ─────────────────────────────────────────────── */}
+      {lockConfirmOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onClick={() => !lockSaving && setLockConfirmOpen(false)}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 12, width: 400,
+              boxShadow: '0 8px 40px rgba(0,0,0,0.18)', padding: '24px',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 style={{ fontWeight: 700, fontSize: 16, color: '#111827', marginBottom: 8 }}>
+              🔒 Lock Scenario
+            </h3>
+            <p style={{ fontSize: 13, color: '#374151', marginBottom: 6 }}>
+              Once locked, <strong>{activeScenario?.name}</strong> cannot be modified or deleted.
+            </p>
+            <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 20 }}>
+              Locked scenarios can still be viewed as a read-only overlay. Continue?
+            </p>
+            {scenarioError && (
+              <p style={{ fontSize: 12, color: '#DC2626', marginBottom: 12 }}>{scenarioError}</p>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button className="btn" onClick={() => setLockConfirmOpen(false)} disabled={lockSaving}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleLockScenario}
+                disabled={lockSaving}
+                style={{ background: '#1D4ED8', borderColor: '#1D4ED8' }}
+              >
+                {lockSaving ? 'Locking…' : 'Lock Scenario'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete confirm modal ───────────────────────────────────────────── */}
+      {deleteConfirmOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onClick={() => !deleteSaving && setDeleteConfirmOpen(false)}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 12, width: 400,
+              boxShadow: '0 8px 40px rgba(0,0,0,0.18)', padding: '24px',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 style={{ fontWeight: 700, fontSize: 16, color: '#DC2626', marginBottom: 8 }}>
+              Delete Scenario
+            </h3>
+            <p style={{ fontSize: 13, color: '#374151', marginBottom: 20 }}>
+              Delete <strong>{activeScenario?.name}</strong>? This action cannot be undone.
+            </p>
+            {scenarioError && (
+              <p style={{ fontSize: 12, color: '#DC2626', marginBottom: 12 }}>{scenarioError}</p>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button className="btn" onClick={() => setDeleteConfirmOpen(false)} disabled={deleteSaving}>
+                Cancel
+              </button>
+              <button
+                className="btn"
+                onClick={handleDeleteScenario}
+                disabled={deleteSaving}
+                style={{ color: '#DC2626', borderColor: '#FCA5A5' }}
+              >
+                {deleteSaving ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -26,6 +26,7 @@ model Project {
   ranks              Rank[]
   pricingParameters  PricingParameters?
   sessions           Session[]
+  scenarios          PricingScenario[]
 }
 
 // ─── Block ────────────────────────────────────────────────────────────────────
@@ -114,6 +115,9 @@ model Unit {
   finalPSF            Float?
   finalPrice          Float?
 
+  // Cumulative adjustment factor since last generation (1.0 = no adjustment)
+  cumulativeAdjustment Float  @default(1.0)
+
   stack               Stack   @relation(fields: [stackId], references: [id], onDelete: Cascade)
 }
 
@@ -131,6 +135,36 @@ model PricingParameters {
   rankReference         String? // rankId of the reference rank (differential = 0) used for relative pricing
 
   project               Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ─── PricingScenario ──────────────────────────────────────────────────────────
+model PricingScenario {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  notes     String?
+  isLocked  Boolean  @default(false)
+  isBase    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  snapshots UnitSnapshot[]
+}
+
+// ─── UnitSnapshot ─────────────────────────────────────────────────────────────
+model UnitSnapshot {
+  id               String          @id @default(cuid())
+  scenarioId       String
+  scenario         PricingScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  unitId           String          // reference to Unit.id at snapshot time (may become stale after regeneration)
+  floor            Int
+  stackId          String
+  unitNumber       String
+  sizeSqft         Float
+  finalPSF         Float
+  finalPrice       Float
+  isManualOverride Boolean
 }
 
 // ─── Session (snapshot) ───────────────────────────────────────────────────────

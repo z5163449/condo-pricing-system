@@ -7,6 +7,7 @@ import rankRoutes from './routes/ranks.js';
 import stackRoutes from './routes/stacks.js';
 import incrementRoutes from './routes/increments.js';
 import unitRoutes from './routes/units.js';
+import { projectScenariosRouter, scenariosRouter } from './routes/scenarios.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -31,11 +32,13 @@ app.get('/api/health', (req, res) => {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/api/projects', projectRoutes);
+app.use('/api/projects', projectScenariosRouter);
 app.use('/api/blocks', blockRoutes);
 app.use('/api/ranks', rankRoutes);
 app.use('/api/stacks', stackRoutes);
 app.use('/api/increments', incrementRoutes);
 app.use('/api/units', unitRoutes);
+app.use('/api/scenarios', scenariosRouter);
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────────
 app.use((req, res) => {

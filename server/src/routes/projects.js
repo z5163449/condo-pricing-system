@@ -208,7 +208,7 @@ router.post('/:id/generate-units', async (req, res, next) => {
     });
     await prisma.unit.updateMany({
       where: { stack: { block: { projectId } } },
-      data: { isManualOverride: false },
+      data: { isManualOverride: false, cumulativeAdjustment: 1.0 },
     });
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -523,6 +523,54 @@ router.post('/:id/generate-units', async (req, res, next) => {
         .map(({ _isManual, ...u }) => u),
     });
 
+    // ── Auto-create / overwrite "Base (Auto-generated)" scenario ─────────────
+    {
+      const freshUnits = await prisma.unit.findMany({
+        where:  { stack: { block: { projectId } } },
+        select: {
+          id: true, floor: true, stackId: true,
+          unitNumber: true, sizeSqft: true,
+          finalPSF: true, finalPrice: true, isManualOverride: true,
+        },
+      });
+      const baseSnapshots = freshUnits
+        .filter(u => u.finalPSF != null && u.finalPrice != null)
+        .map(u => ({
+          unitId:          u.id,
+          floor:           u.floor,
+          stackId:         u.stackId,
+          unitNumber:      u.unitNumber,
+          sizeSqft:        u.sizeSqft,
+          finalPSF:        u.finalPSF,
+          finalPrice:      u.finalPrice,
+          isManualOverride: u.isManualOverride,
+        }));
+
+      const existingBase = await prisma.pricingScenario.findFirst({
+        where: { projectId, isBase: true },
+      });
+      if (existingBase) {
+        await prisma.unitSnapshot.deleteMany({ where: { scenarioId: existingBase.id } });
+        await prisma.unitSnapshot.createMany({
+          data: baseSnapshots.map(s => ({ ...s, scenarioId: existingBase.id })),
+        });
+        await prisma.pricingScenario.update({
+          where: { id: existingBase.id },
+          data:  { updatedAt: new Date() },
+        });
+      } else {
+        await prisma.pricingScenario.create({
+          data: {
+            projectId,
+            name:     'Base (Auto-generated)',
+            isBase:   true,
+            isLocked: false,
+            snapshots: { create: baseSnapshots },
+          },
+        });
+      }
+    }
+
     // ── Step 6: Build solver summary ──────────────────────────────────────────
     const totalSqftFinal = unitsToCreate.reduce((s, u) => s + u.sizeSqft, 0);
     const achievedOverallAvgPSF = totalSqftFinal > 0
@@ -562,6 +610,267 @@ router.post('/:id/generate-units', async (req, res, next) => {
       byBlock,
       correctionWarning,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api/projects/:id/adjust/preview ───────────────────────────────────
+// Dry-run of adjust: returns projected avg PSFs without writing to the DB.
+router.post('/:id/adjust/preview', async (req, res, next) => {
+  try {
+    const { id: projectId } = req.params;
+    const { scope, adjustments } = req.body;
+
+    if (!scope || !adjustments || typeof adjustments !== 'object') {
+      return res.status(400).json({ error: 'scope and adjustments are required' });
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: {
+        pricingParameters: true,
+        blocks: {
+          include: {
+            stacks: { include: { units: true } },
+          },
+        },
+      },
+    });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const roundingUnit = project.pricingParameters?.roundingUnit ?? project.roundingUnit ?? 100;
+
+    const current   = [];
+    const projected = [];
+    let affectedCount = 0;
+
+    for (const block of project.blocks) {
+      for (const stack of block.stacks) {
+        for (const unit of stack.units) {
+          if (unit.calculatedPrice == null || unit.sizeSqft == null || unit.sizeSqft <= 0) continue;
+          if (unit.finalPrice == null) continue;
+
+          const base = {
+            finalPrice:  unit.finalPrice,
+            sizeSqft:    unit.sizeSqft,
+            bedroomType: stack.bedroomType || 'Unknown',
+            blockId:     block.id,
+            blockName:   block.blockName,
+          };
+          current.push(base);
+
+          let pct = null;
+          switch (scope) {
+            case 'all':
+              pct = adjustments['all'] != null ? Number(adjustments['all']) : null;
+              break;
+            case 'bedroomType':
+              pct = stack.bedroomType && adjustments[stack.bedroomType] != null
+                ? Number(adjustments[stack.bedroomType]) : null;
+              break;
+            case 'block':
+              pct = adjustments[block.id] != null ? Number(adjustments[block.id]) : null;
+              break;
+            case 'rank':
+              pct = stack.rankId && adjustments[stack.rankId] != null
+                ? Number(adjustments[stack.rankId]) : null;
+              break;
+            case 'typeCode':
+              pct = stack.unitTypeCode && adjustments[stack.unitTypeCode] != null
+                ? Number(adjustments[stack.unitTypeCode]) : null;
+              break;
+          }
+
+          if (pct != null && isFinite(pct) && pct !== 0) {
+            const newFactor = (unit.cumulativeAdjustment ?? 1.0) * (1 + pct / 100);
+            const projPrice = Math.round(unit.calculatedPrice * newFactor / roundingUnit) * roundingUnit;
+            projected.push({ ...base, finalPrice: projPrice });
+            affectedCount++;
+          } else {
+            projected.push({ ...base });
+          }
+        }
+      }
+    }
+
+    function wAvgPSF(data) {
+      const rev  = data.reduce((s, u) => s + u.finalPrice, 0);
+      const sqft = data.reduce((s, u) => s + u.sizeSqft,  0);
+      return sqft > 0 ? rev / sqft : null;
+    }
+
+    function groupPSF(data, keyField, nameField) {
+      const m = {};
+      for (const u of data) {
+        const k = u[keyField];
+        if (!m[k]) m[k] = { name: u[nameField], rev: 0, sqft: 0 };
+        m[k].rev  += u.finalPrice;
+        m[k].sqft += u.sizeSqft;
+      }
+      return m;
+    }
+
+    const curBR  = groupPSF(current,   'bedroomType', 'bedroomType');
+    const projBR = groupPSF(projected, 'bedroomType', 'bedroomType');
+    const byBedroomType = Object.keys(curBR).sort().map(br => ({
+      type:         br,
+      currentPSF:   curBR[br].sqft  > 0 ? curBR[br].rev  / curBR[br].sqft  : null,
+      projectedPSF: projBR[br]?.sqft > 0 ? projBR[br].rev / projBR[br].sqft : null,
+    }));
+
+    const curBlk  = groupPSF(current,   'blockId', 'blockName');
+    const projBlk = groupPSF(projected, 'blockId', 'blockName');
+    const byBlock = Object.keys(curBlk)
+      .sort((a, b) => curBlk[a].name.localeCompare(curBlk[b].name, undefined, { numeric: true }))
+      .map(id => ({
+        blockName:    curBlk[id].name,
+        currentPSF:   curBlk[id].sqft  > 0 ? curBlk[id].rev  / curBlk[id].sqft  : null,
+        projectedPSF: projBlk[id]?.sqft > 0 ? projBlk[id].rev / projBlk[id].sqft : null,
+      }));
+
+    res.json({
+      overall: {
+        currentAvgPSF:   wAvgPSF(current),
+        projectedAvgPSF: wAvgPSF(projected),
+      },
+      byBedroomType,
+      byBlock,
+      affectedCount,
+      totalCount: current.length,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── POST /api/projects/:id/adjust ───────────────────────────────────────────
+// Apply a % adjustment to finalPSF/finalPrice for non-manual units.
+// scope: "all" | "bedroomType" | "block" | "rank" | "typeCode"
+// adjustments: { [key]: number }  e.g. { "all": 2.5 } or { "2BR": 1.5, "3BR": 2.0 }
+// NEVER writes to calculatedPSF or calculatedPrice. NEVER touches manual-override units.
+router.post('/:id/adjust', async (req, res, next) => {
+  try {
+    const { id: projectId } = req.params;
+    const { scope, adjustments } = req.body;
+
+    if (!scope || !adjustments || typeof adjustments !== 'object') {
+      return res.status(400).json({ error: 'scope and adjustments are required' });
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      include: {
+        pricingParameters: true,
+        blocks: {
+          include: {
+            stacks: { include: { units: true } },
+          },
+        },
+      },
+    });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const roundingUnit = project.pricingParameters?.roundingUnit ?? project.roundingUnit ?? 100;
+
+    const updates = [];
+    for (const block of project.blocks) {
+      for (const stack of block.stacks) {
+        for (const unit of stack.units) {
+          if (unit.calculatedPrice == null || unit.sizeSqft == null || unit.sizeSqft <= 0) continue;
+
+          let pct = null;
+          switch (scope) {
+            case 'all':
+              pct = adjustments['all'] != null ? Number(adjustments['all']) : null;
+              break;
+            case 'bedroomType':
+              pct = stack.bedroomType && adjustments[stack.bedroomType] != null
+                ? Number(adjustments[stack.bedroomType]) : null;
+              break;
+            case 'block':
+              pct = adjustments[block.id] != null ? Number(adjustments[block.id]) : null;
+              break;
+            case 'rank':
+              pct = stack.rankId && adjustments[stack.rankId] != null
+                ? Number(adjustments[stack.rankId]) : null;
+              break;
+            case 'typeCode':
+              pct = stack.unitTypeCode && adjustments[stack.unitTypeCode] != null
+                ? Number(adjustments[stack.unitTypeCode]) : null;
+              break;
+          }
+
+          if (pct == null || !isFinite(pct) || pct === 0) continue;
+
+          const newFactor     = (unit.cumulativeAdjustment ?? 1.0) * (1 + pct / 100);
+          const newFinalPrice = Math.round(unit.calculatedPrice * newFactor / roundingUnit) * roundingUnit;
+          const newFinalPSF   = newFinalPrice / unit.sizeSqft;
+          updates.push({
+            id: unit.id, finalPSF: newFinalPSF, finalPrice: newFinalPrice,
+            cumulativeAdjustment: newFactor,
+            sizeSqft: unit.sizeSqft, bedroomType: stack.bedroomType, blockId: block.id, blockName: block.blockName,
+          });
+        }
+      }
+    }
+
+    if (updates.length > 0) {
+      await prisma.$transaction(
+        updates.map(u => prisma.unit.update({
+          where: { id: u.id },
+          data:  { finalPSF: u.finalPSF, finalPrice: u.finalPrice, cumulativeAdjustment: u.cumulativeAdjustment },
+        }))
+      );
+    }
+
+    // Build summary from in-memory updated values (avoids a second DB round-trip)
+    const updateMap = new Map(updates.map(u => [u.id, u]));
+    const allData = [];
+    for (const block of project.blocks) {
+      for (const stack of block.stacks) {
+        for (const unit of stack.units) {
+          const upd = updateMap.get(unit.id);
+          allData.push({
+            finalPrice:  upd ? upd.finalPrice  : unit.finalPrice,
+            sizeSqft:    unit.sizeSqft,
+            bedroomType: stack.bedroomType || 'Unknown',
+            blockId:     block.id,
+            blockName:   block.blockName,
+          });
+        }
+      }
+    }
+
+    const priced     = allData.filter(u => u.finalPrice != null && u.sizeSqft > 0);
+    const totalRev   = priced.reduce((s, u) => s + u.finalPrice, 0);
+    const totalSqft  = priced.reduce((s, u) => s + u.sizeSqft, 0);
+    const achievedOverallAvgPSF = totalSqft > 0 ? totalRev / totalSqft : null;
+
+    const brMap = {};
+    for (const u of priced) {
+      const br = u.bedroomType;
+      if (!brMap[br]) brMap[br] = { revenue: 0, sqft: 0, count: 0 };
+      brMap[br].revenue += u.finalPrice;
+      brMap[br].sqft    += u.sizeSqft;
+      brMap[br].count++;
+    }
+    const byBedroomType = Object.entries(brMap).map(([type, { revenue, sqft, count }]) => ({
+      type, achievedPSF: sqft > 0 ? revenue / sqft : null, unitCount: count,
+    }));
+
+    const blkMap = {};
+    for (const u of priced) {
+      if (!blkMap[u.blockId]) blkMap[u.blockId] = { blockName: u.blockName, revenue: 0, sqft: 0, count: 0 };
+      blkMap[u.blockId].revenue += u.finalPrice;
+      blkMap[u.blockId].sqft    += u.sizeSqft;
+      blkMap[u.blockId].count++;
+    }
+    const byBlock = Object.entries(blkMap).map(([, { blockName, revenue, sqft, count }]) => ({
+      blockName, achievedPSF: sqft > 0 ? revenue / sqft : null, unitCount: count,
+    }));
+
+    res.json({ updatedCount: updates.length, achievedOverallAvgPSF, byBedroomType, byBlock });
   } catch (err) {
     next(err);
   }

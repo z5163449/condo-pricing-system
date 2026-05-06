@@ -302,11 +302,276 @@ function AddBlocksPanel({ projectId, onSaved, onCancel }) {
   );
 }
 
+// ─── TypeCodeLibrary ──────────────────────────────────────────────────────────
+function TypeCodeLibrary({ projectId, blocks, typeCodes, onAdded, onUpdated, onDeleted }) {
+  const EMPTY_FORM = { code: '', bedroomType: '', sizeSqft: '', facing: '', notes: '', blockAssignments: {} };
+  const [showForm,      setShowForm]      = useState(false);
+  const [editingId,     setEditingId]     = useState(null);
+  const [form,          setForm]          = useState(EMPTY_FORM);
+  const [saving,        setSaving]        = useState(false);
+  const [error,         setError]         = useState(null);
+  const [deleteError,   setDeleteError]   = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  function openAdd() {
+    setForm(EMPTY_FORM); setEditingId(null); setShowForm(true); setError(null); setDeleteError(null);
+  }
+  function openEdit(tc) {
+    setForm({ code: tc.code, bedroomType: tc.bedroomType, sizeSqft: tc.sizeSqft.toString(),
+      facing: tc.facing ?? '', notes: tc.notes ?? '', blockAssignments: {} });
+    setEditingId(tc.id); setShowForm(true); setError(null); setDeleteError(null);
+  }
+  function cancel() { setShowForm(false); setEditingId(null); setError(null); }
+
+  const editingTc = editingId ? typeCodes.find(tc => tc.id === editingId) : null;
+  const stackCascadeCount = editingTc && editingTc.stacks?.length > 0
+    && (form.sizeSqft !== String(editingTc.sizeSqft) || form.bedroomType !== editingTc.bedroomType)
+    ? editingTc.stacks.length : 0;
+
+  async function save() {
+    if (!form.code.trim() || !form.bedroomType.trim() || !form.sizeSqft) {
+      setError('Code, bedroom type and size are required'); return;
+    }
+    setSaving(true); setError(null);
+    try {
+      if (editingId) {
+        const patchBody = {
+          code:        form.code.trim(),
+          bedroomType: form.bedroomType.trim(),
+          sizeSqft:    Number(form.sizeSqft),
+          facing:      form.facing || null,
+          notes:       form.notes  || null,
+        };
+        console.log('Saving type code PATCH body:', JSON.stringify(patchBody));
+        const res = await fetch(`/api/typecodes/${editingId}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patchBody),
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+        onUpdated(await res.json());
+      } else {
+        const blockAssignments = [];
+        for (const [blockId, val] of Object.entries(form.blockAssignments)) {
+          const nums = val.split(',').map(s => s.trim()).filter(Boolean)
+            .map(Number).filter(n => !isNaN(n) && Number.isInteger(n));
+          if (nums.length > 0) blockAssignments.push({ blockId, stackNumbers: nums });
+        }
+        const res = await fetch(`/api/projects/${projectId}/typecodes`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: form.code.trim(), bedroomType: form.bedroomType.trim(),
+            sizeSqft: Number(form.sizeSqft), facing: form.facing || null, notes: form.notes || null,
+            blockAssignments }),
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+        onAdded(await res.json());
+      }
+      cancel();
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  function tryDelete(tc) {
+    setDeleteError(null);
+    if (tc.stacks?.length > 0) {
+      setDeleteError(`Cannot delete: ${tc.stacks.length} stack${tc.stacks.length !== 1 ? 's are' : ' is'} using this type code`);
+      return;
+    }
+    setDeleteConfirm(tc);
+  }
+
+  async function confirmDelete() {
+    if (!deleteConfirm) return;
+    try {
+      const res = await fetch(`/api/typecodes/${deleteConfirm.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        let msg = `Delete failed (${res.status})`;
+        try { const d = await res.json(); if (d.error) msg = d.error; } catch {}
+        setDeleteError(msg);
+        return;
+      }
+      onDeleted(deleteConfirm.id);
+      setDeleteConfirm(null);
+    } catch (e) {
+      setDeleteError(e.message || 'Delete failed');
+    }
+  }
+
+  const canSave = form.code.trim() && form.bedroomType.trim() && form.sizeSqft;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900">Type Code Library</h2>
+        {!showForm
+          ? <button className="btn-primary text-sm" onClick={openAdd}>+ Add Type Code</button>
+          : <button className="btn-secondary text-sm" onClick={cancel}>Cancel</button>
+        }
+      </div>
+
+      <div className="card p-0 overflow-hidden">
+        {typeCodes.length === 0 && !showForm ? (
+          <div className="text-center py-10 text-gray-400">
+            <div className="text-3xl mb-2">🏷</div>
+            <p className="text-sm">No type codes yet. Add one to get started.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100 text-left text-gray-500 text-xs font-medium">
+                  <th className="px-4 py-2.5">Code</th>
+                  <th className="px-4 py-2.5">Bedroom Type</th>
+                  <th className="px-4 py-2.5 text-right">Size (sqft)</th>
+                  <th className="px-4 py-2.5">Facing</th>
+                  <th className="px-4 py-2.5 text-center">Stacks</th>
+                  <th className="px-4 py-2.5 w-24" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {typeCodes.length === 0 && (
+                  <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400 text-xs">No type codes yet</td></tr>
+                )}
+                {typeCodes.map(tc => (
+                  <tr key={tc.id} className={`hover:bg-gray-50 group ${editingId === tc.id ? 'bg-brand-50' : ''}`}>
+                    <td className="px-4 py-2.5 font-semibold text-gray-900">{tc.code}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="badge bg-blue-50 text-blue-700 text-xs">{tc.bedroomType}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">{tc.sizeSqft.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 text-gray-500">{tc.facing ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-xs text-gray-600 max-w-[220px]">
+                      {tc.stacks?.length > 0 ? (() => {
+                        const byBlock = {};
+                        for (const s of tc.stacks) {
+                          const name = s.block?.blockName ?? s.blockId;
+                          (byBlock[name] = byBlock[name] || []).push(s.stackNumber);
+                        }
+                        return Object.entries(byBlock)
+                          .map(([name, nums]) => `Blk ${name}: ${nums.map(n => `#${n}`).join(', ')}`)
+                          .join(' | ');
+                      })() : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button className="text-xs text-brand-600 hover:underline font-medium" onClick={() => openEdit(tc)}>Edit</button>
+                        <button className="text-xs text-red-400 hover:text-red-600" onClick={() => tryDelete(tc)}>Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {deleteError && (
+          <div className="px-4 py-2 text-xs text-red-600 bg-red-50 border-t border-red-100 flex items-center justify-between">
+            {deleteError}
+            <button className="ml-4 text-red-400 hover:text-red-600" onClick={() => setDeleteError(null)}>✕</button>
+          </div>
+        )}
+
+        {showForm && (
+          <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-4">
+            <datalist id="bedroom-type-options-tc">
+              {BEDROOM_TYPES.map(bt => <option key={bt} value={bt} />)}
+            </datalist>
+            <h3 className="text-sm font-semibold text-gray-700">
+              {editingId ? `Edit: ${editingTc?.code}` : 'New Type Code'}
+            </h3>
+            {stackCascadeCount > 0 && (
+              <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+                ⚠ Saving will update all <strong>{stackCascadeCount}</strong> stack{stackCascadeCount !== 1 ? 's' : ''} using this type code
+              </div>
+            )}
+            {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <label className="label text-xs">Type Code <span className="text-red-500">*</span></label>
+                <input className="input text-xs" autoFocus placeholder="3BR P1+S"
+                  value={form.code} onChange={e => setForm(p => ({ ...p, code: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label text-xs">Bedroom Type <span className="text-red-500">*</span></label>
+                <input className="input text-xs" list="bedroom-type-options-tc" placeholder="3BR"
+                  value={form.bedroomType} onChange={e => setForm(p => ({ ...p, bedroomType: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label text-xs">Size (sqft) <span className="text-red-500">*</span></label>
+                <input className="input text-xs text-right" type="number" min="0" step="0.1" placeholder="969"
+                  value={form.sizeSqft} onChange={e => setForm(p => ({ ...p, sizeSqft: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label text-xs">Facing</label>
+                <input className="input text-xs" placeholder="Pool, North…"
+                  value={form.facing} onChange={e => setForm(p => ({ ...p, facing: e.target.value }))} />
+              </div>
+            </div>
+            <div>
+              <label className="label text-xs">Notes</label>
+              <input className="input text-xs" placeholder="Optional notes…"
+                value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
+            </div>
+            {!editingId && blocks.length > 0 && (
+              <div>
+                <label className="label text-xs">Assign to Blocks</label>
+                <p className="text-xs text-gray-400 mb-2">Enter comma-separated stack numbers for each block (leave blank to skip)</p>
+                <div className="space-y-2">
+                  {blocks.map(block => (
+                    <div key={block.id} className="flex items-center gap-3">
+                      <span className="text-xs font-medium text-gray-700 w-24 shrink-0 truncate">{block.blockName}</span>
+                      <span className="text-xs text-gray-400 shrink-0">Stacks:</span>
+                      <input className="input text-xs flex-1" placeholder="1, 8, 15"
+                        value={form.blockAssignments[block.id] ?? ''}
+                        onChange={e => setForm(p => ({ ...p, blockAssignments: { ...p.blockAssignments, [block.id]: e.target.value } }))} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-1 border-t border-gray-200">
+              <button className="btn-secondary text-xs" onClick={cancel}>Cancel</button>
+              <button className="btn-primary text-xs" onClick={save} disabled={saving || !canSave}>
+                {saving ? '…' : editingId ? 'Save Changes' : 'Add Type Code'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {deleteConfirm && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.35)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setDeleteConfirm(null)}>
+          <div style={{ background: '#fff', borderRadius: 12, width: 380,
+            boxShadow: '0 8px 40px rgba(0,0,0,0.18)', padding: 24 }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ fontWeight: 700, fontSize: 15, color: '#DC2626', marginBottom: 8 }}>Delete Type Code</h3>
+            <p style={{ fontSize: 13, color: '#374151', marginBottom: 12 }}>
+              Delete <strong>{deleteConfirm.code}</strong>? This action cannot be undone.
+            </p>
+            {deleteError && (
+              <p style={{ fontSize: 12, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FCA5A5',
+                borderRadius: 6, padding: '6px 10px', marginBottom: 12 }}>{deleteError}</p>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button className="btn-secondary text-xs" onClick={() => { setDeleteConfirm(null); setDeleteError(null); }}>Cancel</button>
+              <button className="btn-secondary text-xs" style={{ color: '#DC2626', borderColor: '#FCA5A5' }}
+                onClick={confirmDelete}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── StackRow — display + inline edit ─────────────────────────────────────────
-function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
+function StackRow({ stack, ranks, typeCodes = [], blockStartingFloor, onSaved, onDeleted }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
+    typeCodeId:          stack.typeCodeId ?? '',
     stackNumber:         stack.stackNumber?.toString() ?? '',
     unitTypeCode:        stack.unitTypeCode,
     bedroomType:         stack.bedroomType,
@@ -324,6 +589,7 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
   useEffect(() => {
     if (!editing) {
       setForm({
+        typeCodeId:          stack.typeCodeId ?? '',
         stackNumber:         stack.stackNumber?.toString() ?? '',
         unitTypeCode:        stack.unitTypeCode,
         bedroomType:         stack.bedroomType,
@@ -337,6 +603,17 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
     }
   }, [stack, editing]);
 
+  function handleTypeCodeSelect(tcId) {
+    const tc = typeCodes.find(t => t.id === tcId);
+    if (tc) {
+      setForm(p => ({ ...p, typeCodeId: tcId, unitTypeCode: tc.code,
+        bedroomType: tc.bedroomType, standardSizeSqft: tc.sizeSqft.toString(),
+        facing: tc.facing ?? p.facing }));
+    } else {
+      setForm(p => ({ ...p, typeCodeId: '' }));
+    }
+  }
+
   function onChange(e) {
     const { name, value, type, checked } = e.target;
     setForm(p => ({ ...p, [name]: type === 'checkbox' ? checked : value }));
@@ -349,6 +626,7 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          typeCodeId:          form.typeCodeId || null,
           stackNumber:         form.stackNumber !== '' ? Number(form.stackNumber) : 0,
           unitTypeCode:        form.unitTypeCode,
           bedroomType:         form.bedroomType,
@@ -427,31 +705,23 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
   }
 
   // ── Edit row ──
+  const selectedTc = form.typeCodeId ? typeCodes.find(tc => tc.id === form.typeCodeId) : null;
   return (
     <tr className="bg-brand-50 border-y border-brand-100">
       <td className="px-2 py-1.5">
-        <input
-          className="input w-14 text-xs text-center" name="stackNumber"
-          value={form.stackNumber} onChange={onChange} placeholder="01"
-        />
+        <span className="text-xs font-mono text-gray-700 px-1">
+          {String(stack.stackNumber ?? 0).padStart(2, '0')}
+        </span>
       </td>
-      <td className="px-2 py-1.5">
-        <input
-          className="input w-20 text-xs" name="unitTypeCode"
-          value={form.unitTypeCode} onChange={onChange} required placeholder="B2-m"
-        />
-      </td>
-      <td className="px-2 py-1.5">
-        <input
-          className="input w-24 text-xs" name="bedroomType" list="bedroom-type-options"
-          value={form.bedroomType} onChange={onChange} placeholder="3BR"
-        />
-      </td>
-      <td className="px-2 py-1.5">
-        <input
-          className="input w-20 text-xs text-right" name="standardSizeSqft"
-          type="number" min="0" step="0.1" value={form.standardSizeSqft} onChange={onChange}
-        />
+      {/* Type Code — read-only when editing existing stack */}
+      <td className="px-2 py-1.5" colSpan={3}>
+        {selectedTc ? (
+          <span className="text-xs text-gray-700 font-medium">
+            {selectedTc.code} · {selectedTc.bedroomType} · {selectedTc.sizeSqft.toLocaleString()} sqft
+          </span>
+        ) : (
+          <span className="text-xs text-gray-400 italic">No type code assigned</span>
+        )}
       </td>
       <td className="px-2 py-1.5">
         <input
@@ -493,7 +763,7 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
         <div className="flex gap-1 justify-end">
           <button
             className="btn-primary text-xs px-2 py-1"
-            onClick={save} disabled={saving || !form.unitTypeCode || !form.standardSizeSqft}
+            onClick={save} disabled={saving || !form.unitTypeCode || !form.standardSizeSqft || !form.bedroomType}
           >{saving ? '…' : t('common.save')}</button>
           <button
             className="btn-secondary text-xs px-2 py-1"
@@ -506,13 +776,14 @@ function StackRow({ stack, ranks, blockStartingFloor, onSaved, onDeleted }) {
 }
 
 // ─── AddStacksPanel — multi-row stack creation ────────────────────────────────
-function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel }) {
+function AddStacksPanel({ blockId, ranks, typeCodes = [], blockStartingFloor, onSaved, onCancel }) {
   const { t } = useTranslation();
 
   const newRow = () => ({
     _key: Math.random().toString(36).slice(2),
-    stackNumber: '', unitTypeCode: '', bedroomType: '3BR',
-    standardSizeSqft: '', facing: '', rankId: '',
+    typeCodeId: '', stackNumber: '',
+    unitTypeCode: '', bedroomType: '', standardSizeSqft: '',
+    facing: '', rankId: '',
     hasPenthouse: false, penthouseSizeSqft: '', stackExcludedFloors: '',
     error: null,
   });
@@ -521,30 +792,34 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
   const [saving, setSaving] = useState(false);
 
   function addRow() { setRows(p => [...p, newRow()]); }
-
-  function removeRow(key) {
-    if (rows.length > 1) setRows(p => p.filter(r => r._key !== key));
-  }
-
+  function removeRow(key) { if (rows.length > 1) setRows(p => p.filter(r => r._key !== key)); }
   function update(key, field, val) {
     setRows(p => p.map(r => r._key === key ? { ...r, [field]: val, error: null } : r));
+  }
+  function selectTypeCode(key, tcId) {
+    const tc = typeCodes.find(t => t.id === tcId);
+    setRows(p => p.map(r => r._key !== key ? r : tc
+      ? { ...r, typeCodeId: tcId, unitTypeCode: tc.code, bedroomType: tc.bedroomType,
+          standardSizeSqft: tc.sizeSqft.toString(), facing: tc.facing ?? r.facing, error: null }
+      : { ...r, typeCodeId: '', unitTypeCode: '', bedroomType: '', standardSizeSqft: '', error: null }
+    ));
   }
 
   async function saveAll() {
     setSaving(true);
-
     const results = await Promise.allSettled(
       rows.map(row =>
         fetch(`/api/blocks/${blockId}/stacks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            stackNumber:       row.stackNumber !== '' ? Number(row.stackNumber) : 0,
-            unitTypeCode:      row.unitTypeCode,
-            bedroomType:       row.bedroomType,
-            standardSizeSqft:  Number(row.standardSizeSqft),
-            facing:            row.facing || null,
-            rankId:            row.rankId || null,
+            typeCodeId:          row.typeCodeId || null,
+            stackNumber:         row.stackNumber !== '' ? Number(row.stackNumber) : 0,
+            unitTypeCode:        row.unitTypeCode,
+            bedroomType:         row.bedroomType,
+            standardSizeSqft:    Number(row.standardSizeSqft),
+            facing:              row.facing || null,
+            rankId:              row.rankId || null,
             hasPenthouse:        row.hasPenthouse,
             penthouseSizeSqft:   row.penthouseSizeSqft ? Number(row.penthouseSizeSqft) : null,
             stackExcludedFloors: excludedInputToArray(row.stackExcludedFloors),
@@ -564,24 +839,34 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
     if (saved.length > 0) onSaved(saved);
     if (failed.length === 0) onCancel();
     else setRows(failed);
-
     setSaving(false);
   }
 
   const canSave = rows.every(r => r.unitTypeCode.trim() && r.standardSizeSqft && r.bedroomType);
 
-  // Column definitions — required flag drives the * marker
+  // Column definitions
   const COLS = [
     { label: t('stack.stackNumber'),         req: false, cls: 'w-[52px]' },
-    { label: t('stack.unitTypeCode'),        req: true,  cls: 'w-[88px]' },
-    { label: t('stack.bedroomType'),         req: true,  cls: 'w-[76px]' },
-    { label: t('stack.standardSizeSqft'),    req: true,  cls: 'w-[76px]' },
+    { label: 'Type Code',                    req: true,  cls: 'flex-1 min-w-[180px]' },
     { label: t('stack.facing'),              req: false, cls: 'w-[88px]' },
-    { label: t('stack.rank'),                req: false, cls: 'flex-1 min-w-[96px]' },
+    { label: t('stack.rank'),                req: false, cls: 'w-[96px]' },
     { label: t('stack.hasPenthouse'),        req: false, cls: 'w-[36px] text-center' },
     { label: t('stack.penthouseSizeSqft'),   req: false, cls: 'w-[72px]' },
     { label: t('stack.stackExcludedFloors'), req: false, cls: 'w-[80px]' },
   ];
+
+  if (typeCodes.length === 0) {
+    return (
+      <div className="bg-green-50 border-t-2 border-green-200 px-4 py-4 text-center">
+        <p className="text-xs text-gray-400 italic">
+          Create type codes first in the Type Code Library above
+        </p>
+        <button type="button" className="btn-secondary text-xs mt-3" onClick={onCancel}>
+          {t('common.cancel')}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-green-50 border-t-2 border-green-200">
@@ -605,21 +890,23 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
                 {/* Stack # */}
                 <input className="input text-xs text-center w-[52px] shrink-0" placeholder="#"
                   value={row.stackNumber} onChange={e => update(row._key, 'stackNumber', e.target.value)} />
-                {/* Type Code */}
-                <input className="input text-xs w-[88px] shrink-0" placeholder="B2-m"
-                  value={row.unitTypeCode} onChange={e => update(row._key, 'unitTypeCode', e.target.value)} />
-                {/* Bedroom */}
-                <input className="input text-xs w-[76px] shrink-0" list="bedroom-type-options"
-                  placeholder="3BR" value={row.bedroomType}
-                  onChange={e => update(row._key, 'bedroomType', e.target.value)} />
-                {/* Size */}
-                <input className="input text-xs text-right w-[76px] shrink-0" type="number" min="0" step="0.1" placeholder="sqft"
-                  value={row.standardSizeSqft} onChange={e => update(row._key, 'standardSizeSqft', e.target.value)} />
+                {/* Type Code dropdown */}
+                <div className="flex-1 min-w-[180px] shrink-0">
+                  <select className="input text-xs w-full" value={row.typeCodeId}
+                    onChange={e => selectTypeCode(row._key, e.target.value)}>
+                    <option value="">— Select type code —</option>
+                    {typeCodes.map(tc => (
+                      <option key={tc.id} value={tc.id}>
+                        {tc.code} · {tc.bedroomType} · {tc.sizeSqft.toLocaleString()} sqft
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 {/* Facing */}
                 <input className="input text-xs w-[88px] shrink-0" placeholder="N/Pool…"
                   value={row.facing} onChange={e => update(row._key, 'facing', e.target.value)} />
                 {/* Rank */}
-                <select className="input text-xs flex-1 min-w-[96px]" value={row.rankId}
+                <select className="input text-xs w-[96px] shrink-0" value={row.rankId}
                   onChange={e => update(row._key, 'rankId', e.target.value)}>
                   <option value="">{t('stack.unranked')}</option>
                   {ranks.map(r => <option key={r.id} value={r.id}>{r.labelEn}</option>)}
@@ -670,7 +957,7 @@ function AddStacksPanel({ blockId, ranks, blockStartingFloor, onSaved, onCancel 
 }
 
 // ─── StacksTable ──────────────────────────────────────────────────────────────
-function StacksTable({ blockId, stacks, ranks, blockStartingFloor, onStacksAdded, onStackUpdated, onStackDeleted }) {
+function StacksTable({ blockId, stacks, ranks, typeCodes = [], blockStartingFloor, onStacksAdded, onStackUpdated, onStackDeleted }) {
   const { t }           = useTranslation();
   const [showAdd, setShowAdd] = useState(false);
 
@@ -720,6 +1007,7 @@ function StacksTable({ blockId, stacks, ranks, blockStartingFloor, onStacksAdded
                   key={stack.id}
                   stack={stack}
                   ranks={ranks}
+                  typeCodes={typeCodes}
                   onSaved={onStackUpdated}
                   onDeleted={onStackDeleted}
                 />
@@ -733,6 +1021,7 @@ function StacksTable({ blockId, stacks, ranks, blockStartingFloor, onStacksAdded
         ? <AddStacksPanel
             blockId={blockId}
             ranks={ranks}
+            typeCodes={typeCodes}
             onSaved={stacks => onStacksAdded(stacks)}
             onCancel={() => setShowAdd(false)}
           />
@@ -750,7 +1039,7 @@ function StacksTable({ blockId, stacks, ranks, blockStartingFloor, onStacksAdded
 }
 
 // ─── BlockCard ────────────────────────────────────────────────────────────────
-function BlockCard({ block, ranks, onUpdate, onDelete }) {
+function BlockCard({ block, ranks, typeCodes = [], onUpdate, onDelete }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing]   = useState(false);
@@ -957,6 +1246,7 @@ function BlockCard({ block, ranks, onUpdate, onDelete }) {
           blockId={block.id}
           stacks={block.stacks || []}
           ranks={ranks}
+          typeCodes={typeCodes}
           onStacksAdded={handleStacksAdded}
           onStackUpdated={handleStackUpdated}
           onStackDeleted={handleStackDeleted}
@@ -1772,6 +2062,7 @@ export default function ProjectSetup() {
   const [project, setProject]   = useState(null);
   const [blocks, setBlocks]     = useState([]);   // source of truth for checksum
   const [ranks, setRanks]       = useState([]);
+  const [typeCodes, setTypeCodes] = useState([]);
   const [loading, setLoading]   = useState(false);
 
   // Project form
@@ -1804,16 +2095,19 @@ export default function ProjectSetup() {
   // Load current project
   useEffect(() => {
     if (!projectId) {
-      setProject(null); setBlocks([]); setRanks([]); setPricingParams(null); setForm(INITIAL_PROJECT_FORM);
+      setProject(null); setBlocks([]); setRanks([]); setTypeCodes([]); setPricingParams(null); setForm(INITIAL_PROJECT_FORM);
       return;
     }
     setLoading(true);
-    fetch(`/api/projects/${projectId}`)
-      .then(r => r.json())
-      .then(p => {
+    Promise.all([
+      fetch(`/api/projects/${projectId}`).then(r => r.json()),
+      fetch(`/api/projects/${projectId}/typecodes`).then(r => r.json()),
+    ])
+      .then(([p, tcs]) => {
         setProject(p);
         setBlocks(p.blocks || []);
         setRanks(p.ranks || []);
+        setTypeCodes(Array.isArray(tcs) ? tcs : []);
         setPricingParams(p.pricingParameters ?? null);
         setForm({
           nameEn:             p.nameEn,
@@ -1827,6 +2121,31 @@ export default function ProjectSetup() {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [projectId]);
+
+  // Refetch blocks (with stacks) and typecodes without touching project form state
+  function refetchBlocksAndTypeCodes() {
+    Promise.all([
+      fetch(`/api/blocks?projectId=${projectId}`).then(r => r.json()),
+      fetch(`/api/projects/${projectId}/typecodes`).then(r => r.json()),
+    ])
+      .then(([bs, tcs]) => {
+        setBlocks(Array.isArray(bs)  ? bs  : []);
+        setTypeCodes(Array.isArray(tcs) ? tcs : []);
+      })
+      .catch(console.error);
+  }
+
+  // ── TypeCode handlers ──
+  function handleTypeCodeAdded(tc) {
+    setTypeCodes(prev => [...prev, tc]);
+  }
+  function handleTypeCodeUpdated(tc) {
+    setTypeCodes(prev => prev.map(t => t.id === tc.id ? tc : t));
+    refetchBlocksAndTypeCodes();
+  }
+  function handleTypeCodeDeleted(id) {
+    setTypeCodes(prev => prev.filter(t => t.id !== id));
+  }
 
   // ── Project form handlers ──
   function handleFormChange(e) {
@@ -2056,6 +2375,18 @@ export default function ProjectSetup() {
           </div>
         </div>
 
+        {/* ── Type Code Library (only when a project is selected) ───────────────── */}
+        {projectId && project && (
+          <TypeCodeLibrary
+            projectId={projectId}
+            blocks={blocks}
+            typeCodes={typeCodes}
+            onAdded={handleTypeCodeAdded}
+            onUpdated={handleTypeCodeUpdated}
+            onDeleted={handleTypeCodeDeleted}
+          />
+        )}
+
         {/* ── Blocks section (only when a project is selected) ────────────────── */}
         {projectId && project && (
           <div className="space-y-4">
@@ -2106,6 +2437,7 @@ export default function ProjectSetup() {
                     key={block.id}
                     block={block}
                     ranks={ranks}
+                    typeCodes={typeCodes}
                     onUpdate={handleBlockUpdated}
                     onDelete={handleBlockDeleted}
                   />

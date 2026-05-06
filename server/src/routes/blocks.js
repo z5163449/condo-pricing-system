@@ -94,7 +94,7 @@ router.post('/:blockId/stacks', async (req, res, next) => {
     const {
       stackNumber, unitTypeCode, bedroomType, standardSizeSqft,
       facing, notes, rankId, hasPenthouse, penthouseUse, penthouseSizeSqft,
-      stackStartingFloor, stackExcludedFloors,
+      stackStartingFloor, stackExcludedFloors, typeCodeId,
     } = req.body;
 
     if (!unitTypeCode || !bedroomType || standardSizeSqft === undefined) {
@@ -111,6 +111,7 @@ router.post('/:blockId/stacks', async (req, res, next) => {
         facing:               facing ?? null,
         notes:                notes ?? null,
         rankId:               rankId || null,
+        typeCodeId:           typeCodeId || null,
         hasPenthouse:         hasPenthouse ?? false,
         penthouseUse:         penthouseUse ?? null,
         penthouseSizeSqft:    penthouseSizeSqft ? Number(penthouseSizeSqft) : null,

@@ -8,6 +8,7 @@ import stackRoutes from './routes/stacks.js';
 import incrementRoutes from './routes/increments.js';
 import unitRoutes from './routes/units.js';
 import { projectScenariosRouter, scenariosRouter } from './routes/scenarios.js';
+import { projectTypeCodesRouter, typeCodesRouter } from './routes/typecodes.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -39,6 +40,8 @@ app.use('/api/stacks', stackRoutes);
 app.use('/api/increments', incrementRoutes);
 app.use('/api/units', unitRoutes);
 app.use('/api/scenarios', scenariosRouter);
+app.use('/api/projects', projectTypeCodesRouter);
+app.use('/api/typecodes', typeCodesRouter);
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────────
 app.use((req, res) => {

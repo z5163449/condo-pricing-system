@@ -27,6 +27,7 @@ model Project {
   pricingParameters  PricingParameters?
   sessions           Session[]
   scenarios          PricingScenario[]
+  typeCodes          TypeCode[]
 }
 
 // ─── Block ────────────────────────────────────────────────────────────────────
@@ -62,6 +63,9 @@ model Stack {
   stackStartingPSFLocked Boolean @default(false)
   stackIncrements      String?  // JSON array of increment bands — overrides rank bands for this stack
   stackIncrementsLocked Boolean  @default(false)
+
+  typeCodeId           String?
+  typeCode             TypeCode? @relation(fields: [typeCodeId], references: [id])
 
   block             Block    @relation(fields: [blockId], references: [id], onDelete: Cascade)
   rank             Rank?    @relation(fields: [rankId], references: [id])
@@ -165,6 +169,22 @@ model UnitSnapshot {
   finalPSF         Float
   finalPrice       Float
   isManualOverride Boolean
+}
+
+// ─── TypeCode ─────────────────────────────────────────────────────────────────
+model TypeCode {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  code         String
+  bedroomType  String
+  sizeSqft     Float
+  facing       String?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  stacks       Stack[]
 }
 
 // ─── Session (snapshot) ───────────────────────────────────────────────────────

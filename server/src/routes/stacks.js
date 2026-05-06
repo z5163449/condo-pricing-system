@@ -25,6 +25,7 @@ router.patch('/:id', async (req, res, next) => {
       facing, notes, rankId, hasPenthouse, penthouseUse, penthouseSizeSqft,
       stackStartingFloor, stackExcludedFloors,
       stackStartingPSF, stackStartingPSFLocked, stackIncrements, stackIncrementsLocked,
+      typeCodeId,
     } = req.body;
 
     const stack = await prisma.stack.update({
@@ -34,6 +35,7 @@ router.patch('/:id', async (req, res, next) => {
         ...(unitTypeCode           !== undefined && { unitTypeCode }),
         ...(bedroomType            !== undefined && { bedroomType }),
         ...(standardSizeSqft       !== undefined && { standardSizeSqft: Number(standardSizeSqft) }),
+        ...(typeCodeId             !== undefined && { typeCodeId: typeCodeId || null }),
         ...(facing                 !== undefined && { facing: facing || null }),
         ...(notes                  !== undefined && { notes: notes || null }),
         ...(rankId                 !== undefined && { rankId: rankId || null }),

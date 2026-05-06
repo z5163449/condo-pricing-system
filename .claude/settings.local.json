@@ -8,7 +8,8 @@
       "Bash(npx tsc *)",
       "Bash(xargs grep *)",
       "Bash(xargs ls *)",
-      "Bash(PRISMA_FORCE_COLOR=0 npx prisma *)"
+      "Bash(PRISMA_FORCE_COLOR=0 npx prisma *)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

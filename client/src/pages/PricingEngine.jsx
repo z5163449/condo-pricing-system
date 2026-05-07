@@ -61,7 +61,7 @@ function computeStats(units) {
 }
 
 // ─── SummaryPanel ─────────────────────────────────────────────────────────────
-function SummaryPanel({ unitsRich, pricingParameters }) {
+function SummaryPanel({ unitsRich, pricingParameters, expectedNSA }) {
   const targetOverall = pricingParameters?.targetOverallAvgPSF ?? null;
 
   const targetBedroom = {};
@@ -141,9 +141,24 @@ function SummaryPanel({ unitsRich, pricingParameters }) {
           </div>
           <div className="text-right">
             <div className="text-xs text-gray-400 mb-0.5">Total NSA</div>
-            <div className="text-lg font-semibold text-gray-800 tabular-nums">
-              {totalSqft.toLocaleString()} sqft
+            <div className="text-lg font-semibold tabular-nums" style={{
+              color: expectedNSA == null ? '#1F2937'
+                : totalSqft === expectedNSA ? '#16A34A'
+                : '#DC2626'
+            }}>
+              {Math.round(totalSqft).toLocaleString()} sqft
             </div>
+            {expectedNSA != null && totalSqft !== expectedNSA && (
+              <div className="text-xs text-gray-400">
+                / {Math.round(expectedNSA).toLocaleString()} expected
+                <span style={{ color: '#DC2626', marginLeft: 4 }}>
+                  ({totalSqft - expectedNSA > 0 ? '+' : ''}{Math.round(totalSqft - expectedNSA).toLocaleString()})
+                </span>
+              </div>
+            )}
+            {expectedNSA != null && totalSqft === expectedNSA && (
+              <div className="text-xs" style={{ color: '#16A34A' }}>✓ matches expected</div>
+            )}
           </div>
           <div className="text-right">
             <div className="text-xs text-gray-400 mb-0.5">Total Revenue</div>
@@ -194,6 +209,8 @@ function SummaryPanel({ unitsRich, pricingParameters }) {
 // ─── BlockPricingTable ────────────────────────────────────────────────────────
 function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick, roundingUnit = 100, readOnly = false }) {
   const { t } = useTranslation();
+  const blockNSA = (block.stacks || []).reduce((sum, s) =>
+    sum + (s.units || []).reduce((ss, u) => ss + (u.sizeSqft ?? 0), 0), 0);
   const [collapsed,      setCollapsed]      = useState(false);
   const [showFloorAvg,   setShowFloorAvg]   = useState(true);
   const [editingUnitId,  setEditingUnitId]  = useState(null);
@@ -249,11 +266,10 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
         body:    JSON.stringify({ finalPSF: psf, finalPrice: price, isManualOverride: true }),
       });
       if (!res.ok) throw new Error('Save failed');
-      onUnitChange?.(savedUnitId, { finalPSF: psf, finalPrice: price, isManualOverride: true });
       setEditingUnitId(null);
       setEditingStackId(null);
       setEditingFloor(null);
-      onAfterOverride?.(savedStackId, savedFloor);
+      await onAfterOverride?.(savedStackId, savedFloor);
     } catch {
       // keep edit open so user can retry
     } finally {
@@ -268,12 +284,7 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
     try {
       const res = await fetch(`/api/units/${unit.id}/reset`, { method: 'PATCH' });
       if (!res.ok) throw new Error('Reset failed');
-      const data = await res.json();
-      onUnitChange?.(unit.id, {
-        finalPSF:         data.finalPSF,
-        finalPrice:       data.finalPrice,
-        isManualOverride: false,
-      });
+      await onAfterOverride?.(unit.stackId, unit.floor);
     } catch {
       // silently keep state on error
     } finally {
@@ -361,6 +372,7 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
             <span>{t('pricing.statAvgPSF')}: <strong>{fmtPSF(stats.avgPSF)}</strong></span>
             <span>{t('pricing.statHighPrice')}: <strong>{fmtPrice(stats.highPrice)}</strong></span>
             <span>{t('pricing.statLowPrice')}: <strong>{fmtPrice(stats.lowPrice)}</strong></span>
+            {blockNSA > 0 && <span>NSA: <strong>{Math.round(blockNSA).toLocaleString()} sqft</strong></span>}
           </div>
         </div>
         <svg
@@ -437,6 +449,14 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
                       <div className="font-normal text-[11px]" style={{ color: C.hText, opacity: 0.55 }}>
                         {stack.standardSizeSqft?.toLocaleString()} sqft
                       </div>
+                      {(() => {
+                        const stackNSA = (stack.units || []).reduce((s, u) => s + (u.sizeSqft ?? 0), 0);
+                        return stackNSA > 0 ? (
+                          <div className="font-normal text-[10px]" style={{ color: C.hText, opacity: 0.45 }}>
+                            NSA {Math.round(stackNSA).toLocaleString()}
+                          </div>
+                        ) : null;
+                      })()}
                       {!readOnly && (
                         <div className="font-normal text-[10px] mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
                           style={{ color: '#6366F1' }}>
@@ -1067,19 +1087,8 @@ export default function PricingEngine() {
     }) : prev);
   }
 
-  async function handleAfterOverride(stackId, fromFloor) {
-    if (!projectId) return;
-    try {
-      await fetch(`/api/projects/${projectId}/recalculate-above`, {
-        method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ stackId, fromFloor }),
-      });
-      const projRes = await fetch(`/api/projects/${projectId}`);
-      if (projRes.ok) setProject(await projRes.json());
-    } catch {
-      // silently ignore — override is already saved, recalculation is best-effort
-    }
+  async function handleAfterOverride() {
+    await fetchProject();
   }
 
   // ── Scenario handlers ───────────────────────────────────────────────────────
@@ -1408,6 +1417,7 @@ export default function PricingEngine() {
             <SummaryPanel
               unitsRich={allUnitsRich}
               pricingParameters={project.pricingParameters}
+              expectedNSA={project.expectedNSA ?? null}
             />
           )}
 

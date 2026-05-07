@@ -20,7 +20,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // ─── GET /api/projects/:id ────────────────────────────────────────────────────
-// Get a single project with its blocks and ranks
+// Get a single project with its blocks, ranks, and computed NSA
 router.get('/:id', async (req, res, next) => {
   try {
     const project = await prisma.project.findUnique({
@@ -37,7 +37,46 @@ router.get('/:id', async (req, res, next) => {
       },
     });
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    res.json(project);
+
+    // ── Compute NSA ───────────────────────────────────────────────────────────
+    function parseExclSet(str) {
+      try { return new Set(JSON.parse(str || '[]')); } catch { return new Set(); }
+    }
+
+    const hasGeneratedUnits = project.blocks.some(b => b.stacks.some(s => s.units.length > 0));
+    let calculatedNSA = 0;
+    const nsaByBlock  = [];
+    const nsaByStack  = [];
+
+    for (const block of project.blocks) {
+      let blockNSA = 0;
+      for (const stack of block.stacks) {
+        let stackNSA = 0;
+        if (hasGeneratedUnits) {
+          for (const unit of stack.units) stackNSA += unit.sizeSqft ?? 0;
+        } else {
+          const blockExcl = parseExclSet(block.excludedFloors);
+          const stackExcl = parseExclSet(stack.stackExcludedFloors);
+          const combined  = new Set([...blockExcl, ...stackExcl]);
+          const start     = stack.stackStartingFloor ?? block.startingFloor;
+          const maxFloor  = block.startingFloor + block.totalStoreys - 1;
+          let validCount  = 0;
+          for (let f = start; f <= maxFloor; f++) {
+            if (!combined.has(f)) validCount++;
+          }
+          stackNSA = (stack.standardSizeSqft ?? 0) * validCount;
+        }
+        calculatedNSA += stackNSA;
+        blockNSA      += stackNSA;
+        nsaByStack.push({ stackId: stack.id, stackNumber: stack.stackNumber, unitTypeCode: stack.unitTypeCode, calculatedNSA: stackNSA });
+      }
+      nsaByBlock.push({ blockId: block.id, blockName: block.blockName, calculatedNSA: blockNSA });
+    }
+
+    const nsaMatch      = project.expectedNSA != null ? calculatedNSA === project.expectedNSA : null;
+    const nsaDifference = project.expectedNSA != null ? calculatedNSA - project.expectedNSA   : null;
+
+    res.json({ ...project, calculatedNSA, nsaByBlock, nsaByStack, nsaMatch, nsaDifference });
   } catch (err) {
     next(err);
   }
@@ -73,17 +112,18 @@ router.post('/', async (req, res, next) => {
 // Update a project's fields
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { nameEn, nameZh, description, totalUnitsExpected, roundingUnit, status } = req.body;
+    const { nameEn, nameZh, description, totalUnitsExpected, expectedNSA, roundingUnit, status } = req.body;
 
     const project = await prisma.project.update({
       where: { id: req.params.id },
       data: {
-        ...(nameEn !== undefined && { nameEn }),
-        ...(nameZh !== undefined && { nameZh }),
-        ...(description !== undefined && { description }),
+        ...(nameEn             !== undefined && { nameEn }),
+        ...(nameZh             !== undefined && { nameZh }),
+        ...(description        !== undefined && { description }),
         ...(totalUnitsExpected !== undefined && { totalUnitsExpected }),
-        ...(roundingUnit !== undefined && { roundingUnit }),
-        ...(status !== undefined && { status }),
+        ...(expectedNSA        !== undefined && { expectedNSA: expectedNSA != null ? Number(expectedNSA) : null }),
+        ...(roundingUnit       !== undefined && { roundingUnit }),
+        ...(status             !== undefined && { status }),
       },
     });
     res.json(project);

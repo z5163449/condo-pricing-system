@@ -115,8 +115,19 @@ router.post('/:id/regenerate', async (req, res, next) => {
     }
 
     function getBandIncrement(sortedIncs, floor) {
-      const band = sortedIncs.find(fi => fi.fromFloor <= floor && floor <= fi.toFloor);
-      return band ? (band.incrementPSF ?? 0) : 0;
+      if (!sortedIncs || sortedIncs.length === 0) return 0;
+      // Match the band whose range contains this floor; the last band uses <= on toFloor,
+      // all others use < so a floor sitting exactly on a boundary goes to the next band.
+      const band = sortedIncs.find((b, idx) =>
+        idx < sortedIncs.length - 1
+          ? b.fromFloor <= floor && floor < b.toFloor
+          : b.fromFloor <= floor && floor <= b.toFloor
+      );
+      if (band) return band.incrementPSF ?? 0;
+      // Floor is above all defined bands — carry forward the last band's increment.
+      const lastBand = sortedIncs[sortedIncs.length - 1];
+      if (floor > lastBand.toFloor) return lastBand.incrementPSF ?? 0;
+      return 0;
     }
 
     const units = stack.units; // already ordered by floor

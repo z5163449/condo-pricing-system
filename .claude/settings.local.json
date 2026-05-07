@@ -9,7 +9,8 @@
       "Bash(xargs grep *)",
       "Bash(xargs ls *)",
       "Bash(PRISMA_FORCE_COLOR=0 npx prisma *)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(curl -L \"https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf\" -o fonts/NotoSansSC-Regular.otf --progress-bar)"
     ]
   }
 }

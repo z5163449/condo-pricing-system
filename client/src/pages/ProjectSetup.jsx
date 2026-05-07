@@ -7,7 +7,7 @@ const BEDROOM_TYPES = ['Studio', '1BR', '2BR', '3BR', '4BR', '5BR', '6BR', 'Dual
 
 const INITIAL_PROJECT_FORM = {
   nameEn: '', nameZh: '', description: '',
-  totalUnitsExpected: '', roundingUnit: 100, status: 'draft',
+  totalUnitsExpected: '', expectedNSA: '', roundingUnit: 100, status: 'draft',
 };
 
 const INITIAL_BLOCK_FORM = {
@@ -86,7 +86,7 @@ function Toast({ message, type, onDismiss }) {
 }
 
 // ─── ChecksumBar ──────────────────────────────────────────────────────────────
-function ChecksumBar({ configured, expected, projectId, onGenerate, generating }) {
+function ChecksumBar({ configured, expected, projectId, onGenerate, generating, calculatedNSA, expectedNSA }) {
   const { t } = useTranslation();
   const hasTarget  = expected != null && expected > 0;
   const diff       = hasTarget ? configured - expected : 0;
@@ -107,19 +107,45 @@ function ChecksumBar({ configured, expected, projectId, onGenerate, generating }
     detail = t('block.checksumOver', { count: diff });
   }
 
+  // NSA segment
+  let nsaLabel = null;
+  if (calculatedNSA != null) {
+    if (expectedNSA == null) {
+      nsaLabel = <span className="text-white/70 text-xs">NSA: <strong>{Math.round(calculatedNSA).toLocaleString()} sqft</strong> (expected not set)</span>;
+    } else if (calculatedNSA === expectedNSA) {
+      nsaLabel = <span className="text-xs">NSA: <strong>{Math.round(calculatedNSA).toLocaleString()} sqft</strong> / <strong>{Math.round(expectedNSA).toLocaleString()} sqft</strong> ✅</span>;
+    } else {
+      const nsaDiff = Math.round(calculatedNSA - expectedNSA);
+      nsaLabel = (
+        <span className="text-xs text-white">
+          NSA: <strong>{Math.round(calculatedNSA).toLocaleString()}</strong> / <strong>{Math.round(expectedNSA).toLocaleString()} sqft</strong>
+          {' '}❌ <span className="opacity-80">({nsaDiff > 0 ? '+' : ''}{nsaDiff.toLocaleString()} sqft)</span>
+        </span>
+      );
+    }
+  }
+
   return (
     <div
       className={`${bgCls} text-white px-4 sm:px-6 lg:px-8 py-2
                   flex items-center justify-between gap-4 text-sm font-medium shadow-md
                   sticky top-0 z-30`}
     >
-      <span className="shrink-0">
-        {icon}&nbsp; {t('block.unitsConfigured')}:&nbsp;
-        <strong>{configured.toLocaleString()}</strong>
-        {hasTarget && (
-          <> / <strong>{expected.toLocaleString()}</strong></>
+      <div className="flex items-center gap-4 shrink-0 flex-wrap">
+        <span>
+          {icon}&nbsp; {t('block.unitsConfigured')}:&nbsp;
+          <strong>{configured.toLocaleString()}</strong>
+          {hasTarget && (
+            <> / <strong>{expected.toLocaleString()}</strong></>
+          )}
+        </span>
+        {nsaLabel && (
+          <>
+            <span className="text-white/40 hidden sm:inline">|</span>
+            {nsaLabel}
+          </>
         )}
-      </span>
+      </div>
 
       <div className="flex items-center gap-3 min-w-0">
         {detail && <span className="text-xs opacity-90 hidden sm:block truncate">{detail}</span>}
@@ -305,6 +331,7 @@ function AddBlocksPanel({ projectId, onSaved, onCancel }) {
 // ─── TypeCodeLibrary ──────────────────────────────────────────────────────────
 function TypeCodeLibrary({ projectId, blocks, typeCodes, onAdded, onUpdated, onDeleted }) {
   const EMPTY_FORM = { code: '', bedroomType: '', sizeSqft: '', facing: '', notes: '', blockAssignments: {} };
+  const [collapsed,     setCollapsed]     = useState(() => localStorage.getItem('typeCodeLibraryCollapsed') !== 'false');
   const [showForm,      setShowForm]      = useState(false);
   const [editingId,     setEditingId]     = useState(null);
   const [form,          setForm]          = useState(EMPTY_FORM);
@@ -312,6 +339,14 @@ function TypeCodeLibrary({ projectId, blocks, typeCodes, onAdded, onUpdated, onD
   const [error,         setError]         = useState(null);
   const [deleteError,   setDeleteError]   = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  function toggleCollapsed() {
+    setCollapsed(v => {
+      const next = !v;
+      localStorage.setItem('typeCodeLibraryCollapsed', String(next));
+      return next;
+    });
+  }
 
   function openAdd() {
     setForm(EMPTY_FORM); setEditingId(null); setShowForm(true); setError(null); setDeleteError(null);
@@ -399,17 +434,40 @@ function TypeCodeLibrary({ projectId, blocks, typeCodes, onAdded, onUpdated, onD
   const canSave = form.code.trim() && form.bedroomType.trim() && form.sizeSqft;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">Type Code Library</h2>
-        {!showForm
-          ? <button className="btn-primary text-sm" onClick={openAdd}>+ Add Type Code</button>
-          : <button className="btn-secondary text-sm" onClick={cancel}>Cancel</button>
-        }
-      </div>
-
+    <div className="space-y-0">
       <div className="card p-0 overflow-hidden">
-        {typeCodes.length === 0 && !showForm ? (
+
+        {/* ── Collapsible header ─────────────────────────────────────────────── */}
+        <button
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+          onClick={toggleCollapsed}
+        >
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold text-gray-900">Type Code Library</h2>
+            {typeCodes.length > 0 && (
+              <span className="text-xs text-gray-400 font-normal">{typeCodes.length} type code{typeCodes.length !== 1 ? 's' : ''}</span>
+            )}
+          </div>
+          <svg
+            className={`w-5 h-5 text-gray-400 transition-transform flex-shrink-0 ${collapsed ? '' : 'rotate-180'}`}
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {!collapsed && (
+          <>
+            {/* ── Add / Cancel button row ─────────────────────────────────── */}
+            <div className="flex justify-end px-4 pb-3 border-b border-gray-100">
+              {!showForm
+                ? <button className="btn-primary text-sm" onClick={openAdd}>+ Add Type Code</button>
+                : <button className="btn-secondary text-sm" onClick={cancel}>Cancel</button>
+              }
+            </div>
+
+            {typeCodes.length === 0 && !showForm ? (
           <div className="text-center py-10 text-gray-400">
             <div className="text-3xl mb-2">🏷</div>
             <p className="text-sm">No type codes yet. Add one to get started.</p>
@@ -537,6 +595,9 @@ function TypeCodeLibrary({ projectId, blocks, typeCodes, onAdded, onUpdated, onD
             </div>
           </div>
         )}
+          </>
+        )}
+
       </div>
 
       {deleteConfirm && (
@@ -2114,6 +2175,7 @@ export default function ProjectSetup() {
           nameZh:             p.nameZh,
           description:        p.description ?? '',
           totalUnitsExpected: p.totalUnitsExpected?.toString() ?? '',
+          expectedNSA:        p.expectedNSA?.toString() ?? '',
           roundingUnit:       p.roundingUnit,
           status:             p.status,
         });
@@ -2159,6 +2221,7 @@ export default function ProjectSetup() {
     const body = {
       ...form,
       totalUnitsExpected: form.totalUnitsExpected ? Number(form.totalUnitsExpected) : null,
+      expectedNSA:        form.expectedNSA        ? Number(form.expectedNSA)        : null,
       roundingUnit:       Number(form.roundingUnit),
     };
     const url    = projectId ? `/api/projects/${projectId}` : '/api/projects';
@@ -2252,6 +2315,8 @@ export default function ProjectSetup() {
           projectId={projectId}
           onGenerate={handleGenerate}
           generating={generating}
+          calculatedNSA={project?.calculatedNSA ?? null}
+          expectedNSA={project?.expectedNSA ?? null}
         />
       )}
 
@@ -2295,12 +2360,20 @@ export default function ProjectSetup() {
                   onChange={handleFormChange} rows={2}
                 />
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div>
                   <label className="label">{t('project.totalUnitsExpected')}</label>
                   <input
                     className="input" name="totalUnitsExpected" type="number" min="0"
                     value={form.totalUnitsExpected} onChange={handleFormChange}
+                  />
+                </div>
+                <div>
+                  <label className="label">Expected NSA (sqft)</label>
+                  <input
+                    className="input" name="expectedNSA" type="number" min="0" step="0.01"
+                    value={form.expectedNSA} onChange={handleFormChange}
+                    placeholder="Optional"
                   />
                 </div>
                 <div>

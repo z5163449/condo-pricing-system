@@ -17,6 +17,7 @@ model Project {
   nameZh             String
   description        String?
   totalUnitsExpected Int?
+  expectedNSA        Float?
   roundingUnit       Int                 @default(100)
   status             String              @default("draft") // draft | in-review | approved
   createdAt          DateTime            @default(now())

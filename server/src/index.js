@@ -9,6 +9,7 @@ import incrementRoutes from './routes/increments.js';
 import unitRoutes from './routes/units.js';
 import { projectScenariosRouter, scenariosRouter } from './routes/scenarios.js';
 import { projectTypeCodesRouter, typeCodesRouter } from './routes/typecodes.js';
+import exportRouter from './routes/export.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -41,6 +42,7 @@ app.use('/api/increments', incrementRoutes);
 app.use('/api/units', unitRoutes);
 app.use('/api/scenarios', scenariosRouter);
 app.use('/api/projects', projectTypeCodesRouter);
+app.use('/api/projects', exportRouter);
 app.use('/api/typecodes', typeCodesRouter);
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────────

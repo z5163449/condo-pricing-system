@@ -163,7 +163,16 @@
     "toExcel": "Export to Excel",
     "toPDF": "Export to PDF",
     "includeUnits": "Include Unit Details",
-    "includeSummary": "Include Summary Sheet"
+    "includeSummary": "Include Summary Sheet",
+    "showsuites": "Showsuites Export",
+    "ssUploadLabel": "Upload template",
+    "ssPreview": "Preview matches",
+    "ssPreviewing": "Previewing…",
+    "ssDownload": "Download filled template",
+    "ssDownloading": "Downloading…",
+    "ssMatched": "{{count}} units matched and will be filled",
+    "ssUnmatched": "{{count}} units not found in system",
+    "ssNsaWarning": "NSA mismatch detected. Verify data before uploading to Showsuites."
   },
   "generate": {
     "generateUnits": "Generate Units",

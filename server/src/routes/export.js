@@ -1,9 +1,13 @@
 import { Router }        from 'express';
 import PDFDocument       from 'pdfkit';
+import ExcelJS           from 'exceljs';
+import multer            from 'multer';
 import path              from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync }    from 'fs';
 import prisma            from '../lib/prisma.js';
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 const router    = Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -652,6 +656,186 @@ router.post('/:projectId/export/pdf', async (req, res, next) => {
 
     doc.end();
   } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Showsuites helpers ───────────────────────────────────────────────────────
+
+function getCellText(cell) {
+  if (!cell || cell.value == null) return '';
+  const v = cell.value;
+  if (typeof v === 'string') return v.trim();
+  if (typeof v === 'object' && v.richText) {
+    return v.richText.map(r => r.text).join('').trim();
+  }
+  return String(v).trim();
+}
+
+async function buildUnitLookup(projectId, scenarioId) {
+  const map = {};
+
+  if (scenarioId) {
+    const scenario = await prisma.pricingScenario.findUnique({
+      where:   { id: scenarioId },
+      include: { snapshots: true },
+    });
+    if (!scenario) return null;
+
+    const stackIds = [...new Set(scenario.snapshots.map(s => s.stackId))];
+    const stacks   = await prisma.stack.findMany({
+      where:  { id: { in: stackIds } },
+      select: { id: true, block: { select: { blockName: true } } },
+    });
+    const stackBlock = {};
+    for (const s of stacks) stackBlock[s.id] = s.block.blockName;
+
+    for (const snap of scenario.snapshots) {
+      const blockName = stackBlock[snap.stackId];
+      if (!blockName) continue;
+      map[`${blockName}|${snap.unitNumber}`] = { finalPSF: snap.finalPSF, finalPrice: snap.finalPrice };
+    }
+  } else {
+    const units = await prisma.unit.findMany({
+      where:  { stack: { block: { projectId } } },
+      select: {
+        unitNumber: true,
+        finalPSF:   true,
+        finalPrice: true,
+        stack: { select: { block: { select: { blockName: true } } } },
+      },
+    });
+    for (const u of units) {
+      if (u.finalPSF == null || u.finalPrice == null) continue;
+      map[`${u.stack.block.blockName}|${u.unitNumber}`] = { finalPSF: u.finalPSF, finalPrice: u.finalPrice };
+    }
+  }
+
+  return map;
+}
+
+async function processShowsuitesWorkbook(fileBuffer, lookupMap, fill = true) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(fileBuffer);
+
+  const ws = workbook.worksheets[0];
+  if (!ws) throw Object.assign(new Error('No worksheets found in uploaded file'), { status: 400 });
+
+  // Locate header row by scanning up to first 30 rows for "BLOCK NAME"
+  const TARGETS = ['BLOCK NAME', 'UNIT LABEL', 'PSF LIST PRICE($)', 'LIST PRICE($)', 'PSF SELLING PRICE($)', 'SELLING PRICE($)'];
+  let headerRowNum = null;
+  const colMap = {};
+
+  for (let r = 1; r <= Math.min(30, ws.rowCount); r++) {
+    const row = ws.getRow(r);
+    let foundBlockName = false;
+    row.eachCell((cell, colNum) => {
+      const text = getCellText(cell);
+      if (TARGETS.includes(text)) {
+        colMap[text] = colNum;
+        if (text === 'BLOCK NAME') foundBlockName = true;
+      }
+    });
+    if (foundBlockName) { headerRowNum = r; break; }
+  }
+
+  if (!headerRowNum) {
+    throw Object.assign(new Error('Header row not found — expected column "BLOCK NAME" in template'), { status: 400 });
+  }
+  if (!colMap['UNIT LABEL']) {
+    throw Object.assign(new Error('Required column "UNIT LABEL" not found in template'), { status: 400 });
+  }
+
+  const warnings = [];
+  let total   = 0;
+  let matched = 0;
+
+  for (let r = headerRowNum + 1; r <= ws.rowCount; r++) {
+    const row       = ws.getRow(r);
+    const blockName = getCellText(row.getCell(colMap['BLOCK NAME']));
+    const unitLabel = getCellText(row.getCell(colMap['UNIT LABEL']));
+    if (!blockName || !unitLabel) continue;
+    total++;
+
+    const hit = lookupMap[`${blockName}|${unitLabel}`];
+    if (hit) {
+      matched++;
+      if (fill) {
+        const psf   = Math.round(hit.finalPSF);
+        const price = Math.round(hit.finalPrice);
+        if (colMap['PSF LIST PRICE($)'])   row.getCell(colMap['PSF LIST PRICE($)']).value   = psf;
+        if (colMap['LIST PRICE($)'])        row.getCell(colMap['LIST PRICE($)']).value        = price;
+        if (colMap['PSF SELLING PRICE($)']) row.getCell(colMap['PSF SELLING PRICE($)']).value = psf;
+        if (colMap['SELLING PRICE($)'])     row.getCell(colMap['SELLING PRICE($)']).value     = price;
+      }
+    } else {
+      warnings.push({ blockName, unitLabel, reason: 'No matching unit in system' });
+      if (fill) {
+        if (colMap['PSF LIST PRICE($)'])   row.getCell(colMap['PSF LIST PRICE($)']).value   = 0;
+        if (colMap['LIST PRICE($)'])        row.getCell(colMap['LIST PRICE($)']).value        = 0;
+        if (colMap['PSF SELLING PRICE($)']) row.getCell(colMap['PSF SELLING PRICE($)']).value = 0;
+        if (colMap['SELLING PRICE($)'])     row.getCell(colMap['SELLING PRICE($)']).value     = 0;
+      }
+    }
+  }
+
+  return { workbook, total, matched, unmatched: warnings.length, warnings };
+}
+
+// ─── POST /api/projects/:projectId/export/showsuites/preview ─────────────────
+router.post('/:projectId/export/showsuites/preview', upload.single('file'), async (req, res, next) => {
+  try {
+    const { projectId }          = req.params;
+    const { scenarioId = null }  = req.body;
+
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const lookupMap = await buildUnitLookup(projectId, scenarioId || null);
+    if (!lookupMap) return res.status(404).json({ error: 'Scenario not found' });
+
+    const { total, matched, unmatched, warnings } =
+      await processShowsuitesWorkbook(req.file.buffer, lookupMap, false);
+
+    res.json({ totalRows: total, matched, unmatched, warnings });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// ─── POST /api/projects/:projectId/export/showsuites ─────────────────────────
+router.post('/:projectId/export/showsuites', upload.single('file'), async (req, res, next) => {
+  try {
+    const { projectId }          = req.params;
+    const { scenarioId = null }  = req.body;
+
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const lookupMap = await buildUnitLookup(projectId, scenarioId || null);
+    if (!lookupMap) return res.status(404).json({ error: 'Scenario not found' });
+
+    const { workbook, unmatched, warnings } =
+      await processShowsuitesWorkbook(req.file.buffer, lookupMap, true);
+
+    if (warnings.length > 0) res.setHeader('X-Export-Warnings', String(unmatched));
+
+    const dateStr    = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const safeName   = project.nameEn.replace(/[^a-zA-Z0-9 _-]/g, '').trim().replace(/\s+/g, '_');
+    const filename   = `${safeName}_PriceList_Filled_${dateStr}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 });

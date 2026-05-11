@@ -85,6 +85,33 @@ scenariosRouter.get('/:id', async (req, res, next) => {
   }
 });
 
+// GET /api/scenarios/:id/units — lightweight price-only fetch (no full project reload)
+scenariosRouter.get('/:id/units', async (req, res, next) => {
+  try {
+    const scenario = await prisma.pricingScenario.findUnique({
+      where:  { id: req.params.id },
+      select: {
+        id: true,
+        snapshots: {
+          select: {
+            stackId:         true,
+            floor:           true,
+            finalPSF:        true,
+            finalPrice:      true,
+            sizeSqft:        true,
+            unitNumber:      true,
+            isManualOverride: true,
+          },
+        },
+      },
+    });
+    if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+    res.json({ scenarioId: scenario.id, units: scenario.snapshots });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PATCH /api/scenarios/:id  — update name / notes / isLocked
 scenariosRouter.patch('/:id', async (req, res, next) => {
   try {
@@ -105,12 +132,11 @@ scenariosRouter.patch('/:id', async (req, res, next) => {
   }
 });
 
-// DELETE /api/scenarios/:id  — only if not locked
+// DELETE /api/scenarios/:id
 scenariosRouter.delete('/:id', async (req, res, next) => {
   try {
     const existing = await prisma.pricingScenario.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ error: 'Scenario not found' });
-    if (existing.isLocked) return res.status(403).json({ error: 'Cannot delete a locked scenario' });
 
     await prisma.pricingScenario.delete({ where: { id: req.params.id } });
     res.status(204).send();

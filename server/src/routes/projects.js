@@ -589,7 +589,8 @@ router.post('/:id/generate-units', async (req, res, next) => {
       const existingBase = await prisma.pricingScenario.findFirst({
         where: { projectId, isBase: true },
       });
-      if (existingBase) {
+      if (existingBase && !existingBase.isLocked) {
+        // Overwrite unlocked base in-place
         await prisma.unitSnapshot.deleteMany({ where: { scenarioId: existingBase.id } });
         await prisma.unitSnapshot.createMany({
           data: baseSnapshots.map(s => ({ ...s, scenarioId: existingBase.id })),
@@ -599,6 +600,13 @@ router.post('/:id/generate-units', async (req, res, next) => {
           data:  { updatedAt: new Date() },
         });
       } else {
+        if (existingBase?.isLocked) {
+          // Demote the locked base so it becomes a regular saved scenario
+          await prisma.pricingScenario.update({
+            where: { id: existingBase.id },
+            data:  { isBase: false },
+          });
+        }
         await prisma.pricingScenario.create({
           data: {
             projectId,

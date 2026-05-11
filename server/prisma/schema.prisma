@@ -170,6 +170,9 @@ model UnitSnapshot {
   finalPSF         Float
   finalPrice       Float
   isManualOverride Boolean
+
+  @@index([scenarioId])
+  @@index([stackId])
 }
 
 // ─── TypeCode ─────────────────────────────────────────────────────────────────

@@ -15,6 +15,15 @@ export default function Export() {
   const [generating, setGenerating] = useState(false);
   const [pdfError,   setPdfError]   = useState(null);
 
+  // Showsuites state
+  const [ssScenarioId,      setSsScenarioId]      = useState('');
+  const [ssFile,            setSsFile]            = useState(null);
+  const [ssPreview,         setSsPreview]         = useState(null);
+  const [ssPreviewOpen,     setSsPreviewOpen]      = useState(false);
+  const [ssPreviewing,      setSsPreviewing]       = useState(false);
+  const [ssDownloading,     setSsDownloading]      = useState(false);
+  const [ssError,           setSsError]           = useState(null);
+
   // Load projects list
   useEffect(() => {
     fetch('/api/projects')
@@ -72,6 +81,67 @@ export default function Export() {
       setTimeout(() => setPdfError(null), 6000);
     } finally {
       setGenerating(false);
+    }
+  }
+
+  function showSsError(msg) {
+    setSsError(msg);
+    setTimeout(() => setSsError(null), 6000);
+  }
+
+  async function handleSsPreview() {
+    if (!ssFile) return;
+    setSsPreviewing(true);
+    setSsPreview(null);
+    setSsError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', ssFile);
+      if (ssScenarioId) fd.append('scenarioId', ssScenarioId);
+      const res = await fetch(`/api/projects/${projectId}/export/showsuites/preview`, {
+        method: 'POST',
+        body: fd,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Preview failed');
+      setSsPreview(json);
+      setSsPreviewOpen(false);
+    } catch (err) {
+      showSsError(err.message);
+    } finally {
+      setSsPreviewing(false);
+    }
+  }
+
+  async function handleSsDownload() {
+    if (!ssFile) return;
+    setSsDownloading(true);
+    setSsError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', ssFile);
+      if (ssScenarioId) fd.append('scenarioId', ssScenarioId);
+      const res = await fetch(`/api/projects/${projectId}/export/showsuites`, {
+        method: 'POST',
+        body: fd,
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error || 'Download failed');
+      }
+      const blob        = await res.blob();
+      const url         = URL.createObjectURL(blob);
+      const a           = document.createElement('a');
+      const disposition = res.headers.get('Content-Disposition') ?? '';
+      const match       = disposition.match(/filename="([^"]+)"/);
+      a.href            = url;
+      a.download        = match?.[1] ?? 'PriceList_Filled.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showSsError(err.message);
+    } finally {
+      setSsDownloading(false);
     }
   }
 
@@ -189,13 +259,117 @@ export default function Export() {
             </div>
           </div>
 
-          {/* ── Excel Export (coming soon) ────────────────────────────────── */}
-          <div className="card">
+          {/* ── Showsuites Excel Upload & Fill ───────────────────────────── */}
+          <div className="card space-y-5">
             <h2 className="text-base font-semibold text-gray-900">
-              {t('export.excelExport')}
+              {t('export.showsuites')}
             </h2>
-            <div className="border-t border-gray-100 mt-4 pt-4">
-              <p className="text-sm text-gray-400 italic">{t('export.comingSoon')}</p>
+
+            <div className="border-t border-gray-100 pt-5 space-y-5">
+
+              {/* NSA mismatch warning */}
+              {nsaMismatch && (
+                <div className="flex gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                  <span className="flex-shrink-0">⚠</span>
+                  <span>{t('export.ssNsaWarning')}</span>
+                </div>
+              )}
+
+              {/* Showsuites error */}
+              {ssError && (
+                <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                  {ssError}
+                </div>
+              )}
+
+              {/* Scenario selector */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                  {t('export.scenario')}
+                </label>
+                <select
+                  className="input"
+                  value={ssScenarioId}
+                  onChange={e => setSsScenarioId(e.target.value)}
+                >
+                  <option value="">{t('export.liveData')}</option>
+                  {scenarios.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}{s.isLocked ? ' 🔒' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* File upload */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                  {t('export.ssUploadLabel')}
+                </label>
+                <input
+                  type="file"
+                  accept=".xlsx"
+                  className="block w-full text-sm text-gray-700 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200 cursor-pointer"
+                  onChange={e => {
+                    setSsFile(e.target.files?.[0] ?? null);
+                    setSsPreview(null);
+                  }}
+                />
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleSsPreview}
+                  disabled={!ssFile || ssPreviewing}
+                  className="btn flex-1 justify-center"
+                >
+                  {ssPreviewing ? <><Spinner /> {t('export.ssPreviewing')}</> : t('export.ssPreview')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSsDownload}
+                  disabled={!ssFile || ssDownloading}
+                  className="btn-primary flex-1 justify-center"
+                >
+                  {ssDownloading ? <><Spinner /> {t('export.ssDownloading')}</> : t('export.ssDownload')}
+                </button>
+              </div>
+
+              {/* Preview results */}
+              {ssPreview && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 space-y-2 text-sm">
+                  <p className="text-green-700 font-medium">
+                    ✅ {t('export.ssMatched', { count: ssPreview.matched })}
+                  </p>
+                  {ssPreview.unmatched > 0 && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setSsPreviewOpen(o => !o)}
+                        className="text-amber-700 font-medium hover:underline text-left"
+                      >
+                        ⚠ {t('export.ssUnmatched', { count: ssPreview.unmatched })}
+                        {' '}{ssPreviewOpen ? '▲' : '▼'}
+                      </button>
+                      {ssPreviewOpen && (
+                        <ul className="mt-2 space-y-0.5 text-gray-600 max-h-48 overflow-y-auto">
+                          {ssPreview.warnings.map((w, i) => (
+                            <li key={i} className="font-mono text-xs">
+                              Block {w.blockName} — {w.unitLabel}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-400 pt-1">
+                    Units not found in system may be due to shop units, commercial units, or data discrepancies in the Showsuites template. These rows will retain their original values ($0) in the exported file.
+                  </p>
+                </div>
+              )}
+
             </div>
           </div>
 

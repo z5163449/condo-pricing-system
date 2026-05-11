@@ -207,7 +207,7 @@ function SummaryPanel({ unitsRich, pricingParameters, expectedNSA }) {
 }
 
 // ─── BlockPricingTable ────────────────────────────────────────────────────────
-function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick, roundingUnit = 100, readOnly = false }) {
+function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick, roundingUnit = 100, readOnly = false, pricesLoading = false }) {
   const { t } = useTranslation();
   const blockNSA = (block.stacks || []).reduce((sum, s) =>
     sum + (s.units || []).reduce((ss, u) => ss + (u.sizeSqft ?? 0), 0), 0);
@@ -580,6 +580,12 @@ function BlockPricingTable({ block, onUnitChange, onAfterOverride, onStackClick,
                                       onClick={handleSaveEdit}
                                     >{saving ? '…' : 'Save'}</button>
                                   </div>
+                                </div>
+                              ) : pricesLoading && editingUnitId !== unit.id ? (
+                                /* ── Skeleton shimmer while scenario prices load ── */
+                                <div className="w-full flex flex-col items-end gap-1 py-0.5">
+                                  <div className="h-3 w-14 rounded animate-pulse" style={{ backgroundColor: C.hBorder }} />
+                                  <div className="h-2.5 w-10 rounded animate-pulse" style={{ backgroundColor: C.hBorder, opacity: 0.6 }} />
                                 </div>
                               ) : (
                                 /* ── Display mode ─────────────────────────────── */
@@ -1009,10 +1015,16 @@ export default function PricingEngine() {
   const [saveNewName,      setSaveNewName]      = useState('');
   const [saveNewNotes,     setSaveNewNotes]     = useState('');
   const [saveNewSaving,    setSaveNewSaving]    = useState(false);
-  const [lockConfirmOpen,  setLockConfirmOpen]  = useState(false);
-  const [lockSaving,       setLockSaving]       = useState(false);
-  const [deleteConfirmOpen,setDeleteConfirmOpen]= useState(false);
-  const [deleteSaving,     setDeleteSaving]     = useState(false);
+  const [lockConfirmOpen,   setLockConfirmOpen]   = useState(false);
+  const [lockSaving,        setLockSaving]        = useState(false);
+  const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
+  const [unlockSaving,      setUnlockSaving]      = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteSaving,      setDeleteSaving]      = useState(false);
+  const [pricesLoading,     setPricesLoading]     = useState(false);
+
+  // Stable reference to the last full project fetch — used as merge base for scenario overlays
+  const workingProjectRef = useRef(null);
 
   function openStackPanel(stack) {
     console.log('Opening panel for stack:', stack);
@@ -1024,7 +1036,11 @@ export default function PricingEngine() {
     if (!projectId) return;
     try {
       const res = await fetch(`/api/projects/${projectId}`);
-      if (res.ok) setProject(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        workingProjectRef.current = data;
+        setProject(data);
+      }
     } catch {
       // silently ignore
     }
@@ -1104,40 +1120,61 @@ export default function PricingEngine() {
     const scenario = scenarios.find(s => s.id === scenarioId);
     if (!scenario) return;
     setScenarioLoading(true);
+    setPricesLoading(true);
+
+    // Merge price overlay onto the stable working-project base (avoids cumulative stale overlays
+    // when switching A→B→C without returning to working state)
+    function mergeUnits(baseProject, snapshots) {
+      const snapMap = new Map(snapshots.map(s => [`${s.stackId}|${s.floor}`, s]));
+      return {
+        ...baseProject,
+        blocks: baseProject.blocks.map(b => ({
+          ...b,
+          stacks: b.stacks.map(s => ({
+            ...s,
+            units: (s.units || []).map(u => {
+              const snap = snapMap.get(`${s.id}|${u.floor}`);
+              return snap
+                ? { ...u, finalPSF: snap.finalPSF, finalPrice: snap.finalPrice, isManualOverride: snap.isManualOverride }
+                : u;
+            }),
+          })),
+        })),
+      };
+    }
+
     try {
       if (scenario.isLocked) {
-        const res = await fetch(`/api/scenarios/${scenarioId}`);
+        // Locked: fetch price-only snapshot without touching live DB
+        const res = await fetch(`/api/scenarios/${scenarioId}/units`);
         if (!res.ok) throw new Error('Failed to load scenario');
         const data = await res.json();
-        const snapMap = new Map(data.snapshots.map(s => [s.unitId, s]));
-        setProject(prev => ({
-          ...prev,
-          blocks: prev.blocks.map(b => ({
-            ...b,
-            stacks: b.stacks.map(s => ({
-              ...s,
-              units: (s.units || []).map(u => {
-                const snap = snapMap.get(u.id);
-                return snap
-                  ? { ...u, finalPSF: snap.finalPSF, finalPrice: snap.finalPrice, isManualOverride: snap.isManualOverride }
-                  : u;
-              }),
-            })),
-          })),
-        }));
+        const base = workingProjectRef.current ?? project;
+        setProject(mergeUnits(base, data.units));
         setActiveScenarioId(scenarioId);
         setIsReadOnly(true);
       } else {
+        // Unlocked: restore to DB first (updates live units), then fetch fresh project
         const res = await fetch(`/api/scenarios/${scenarioId}/restore`, { method: 'POST' });
         if (!res.ok) throw new Error('Restore failed');
-        await fetchProject();
+        // Optimistically show restore: fetch units via lightweight endpoint first for fast display,
+        // then do a full fetchProject in the background to keep ref up-to-date
+        const unitsRes = await fetch(`/api/scenarios/${scenarioId}/units`);
+        if (unitsRes.ok) {
+          const data = await unitsRes.json();
+          const base = workingProjectRef.current ?? project;
+          setProject(mergeUnits(base, data.units));
+        }
         setActiveScenarioId(scenarioId);
         setIsReadOnly(false);
+        // Full refresh in background to sync ref (restore changed live DB)
+        fetchProject().catch(() => {});
       }
     } catch (e) {
       setScenarioError(e.message);
     } finally {
       setScenarioLoading(false);
+      setPricesLoading(false);
     }
   }
 
@@ -1199,6 +1236,27 @@ export default function PricingEngine() {
       setScenarioError(e.message);
     } finally {
       setLockSaving(false);
+    }
+  }
+
+  async function handleUnlockScenario() {
+    if (!activeScenarioId) return;
+    setUnlockSaving(true);
+    setScenarioError(null);
+    try {
+      const res = await fetch(`/api/scenarios/${activeScenarioId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ isLocked: false }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Unlock failed'); }
+      await fetchScenarios();
+      setIsReadOnly(false);
+      setUnlockConfirmOpen(false);
+    } catch (e) {
+      setScenarioError(e.message);
+    } finally {
+      setUnlockSaving(false);
     }
   }
 
@@ -1343,10 +1401,26 @@ export default function PricingEngine() {
                 <option value="">— Working state —</option>
                 {scenarios.map(s => (
                   <option key={s.id} value={s.id}>
-                    {s.isLocked ? '🔒 ' : ''}{s.name}{s.isBase ? '' : ''}
+                    {s.isLocked ? '🔒 ' : ''}{s.name} · {s.isLocked ? 'Frozen' : 'Live'}
                   </option>
                 ))}
               </select>
+
+              {/* Inline status badge for the selected scenario */}
+              {activeScenarioId && activeScenario && (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '2px 8px', borderRadius: 9999,
+                  fontSize: 11, fontWeight: 600, flexShrink: 0,
+                  ...(activeScenario.isLocked
+                    ? { background: '#DCFCE7', color: '#15803D' }
+                    : { background: '#FEF3C7', color: '#92400E' }
+                  ),
+                }}>
+                  <span style={{ fontSize: 7 }}>●</span>
+                  {activeScenario.isLocked ? 'Locked — prices frozen' : 'Live — updates with regeneration'}
+                </span>
+              )}
 
               {scenarioLoading && (
                 <span className="text-xs text-gray-400">Loading…</span>
@@ -1369,24 +1443,39 @@ export default function PricingEngine() {
                 >
                   Save to Current
                 </button>
-                <button
-                  className="btn text-sm"
-                  onClick={() => setLockConfirmOpen(true)}
-                  disabled={!activeScenarioId || isReadOnly || scenarioLoading}
-                  title="Lock this scenario permanently"
-                >
-                  🔒 Lock
-                </button>
+                {activeScenario?.isLocked ? (
+                  <button
+                    className="btn text-sm"
+                    onClick={() => setUnlockConfirmOpen(true)}
+                    disabled={!activeScenarioId || scenarioLoading}
+                    title="Unlock this scenario to allow editing"
+                  >
+                    🔓 Unlock
+                  </button>
+                ) : (
+                  <button
+                    className="btn text-sm"
+                    onClick={() => setLockConfirmOpen(true)}
+                    disabled={!activeScenarioId || isReadOnly || scenarioLoading}
+                    title="Lock this scenario permanently"
+                  >
+                    🔒 Lock
+                  </button>
+                )}
                 <button
                   className="btn text-sm"
                   onClick={() => setDeleteConfirmOpen(true)}
-                  disabled={!activeScenarioId || isReadOnly || scenarioLoading}
+                  disabled={!activeScenarioId || scenarioLoading}
                   style={{ color: '#DC2626' }}
                   title="Delete this scenario"
                 >
                   Delete
                 </button>
               </div>
+
+              <p className="w-full text-xs" style={{ color: '#9CA3AF', marginTop: 2 }}>
+                Lock a scenario to freeze its prices permanently. Unlocked scenarios update when you regenerate pricing.
+              </p>
 
               {scenarioError && (
                 <p className="w-full text-xs" style={{ color: '#DC2626' }}>{scenarioError}</p>
@@ -1465,6 +1554,7 @@ export default function PricingEngine() {
                   onStackClick={openStackPanel}
                   roundingUnit={project.pricingParameters?.roundingUnit ?? project.roundingUnit ?? 100}
                   readOnly={isReadOnly}
+                  pricesLoading={pricesLoading}
                 />
               ))}
             </div>
@@ -1602,10 +1692,10 @@ export default function PricingEngine() {
               🔒 Lock Scenario
             </h3>
             <p style={{ fontSize: 13, color: '#374151', marginBottom: 6 }}>
-              Once locked, <strong>{activeScenario?.name}</strong> cannot be modified or deleted.
+              Once locked, <strong>{activeScenario?.name}</strong> will become read-only and cannot be modified.
             </p>
             <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 20 }}>
-              Locked scenarios can still be viewed as a read-only overlay. Continue?
+              Locked scenarios can still be viewed as a read-only overlay and unlocked later if needed. Continue?
             </p>
             {scenarioError && (
               <p style={{ fontSize: 12, color: '#DC2626', marginBottom: 12 }}>{scenarioError}</p>
@@ -1621,6 +1711,48 @@ export default function PricingEngine() {
                 style={{ background: '#1D4ED8', borderColor: '#1D4ED8' }}
               >
                 {lockSaving ? 'Locking…' : 'Lock Scenario'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Unlock confirm modal ──────────────────────────────────────────── */}
+      {unlockConfirmOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onClick={() => !unlockSaving && setUnlockConfirmOpen(false)}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 12, width: 400,
+              boxShadow: '0 8px 40px rgba(0,0,0,0.18)', padding: '24px',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 style={{ fontWeight: 700, fontSize: 16, color: '#111827', marginBottom: 8 }}>
+              🔓 Unlock Scenario
+            </h3>
+            <p style={{ fontSize: 13, color: '#374151', marginBottom: 20 }}>
+              Are you sure you want to unlock <strong>{activeScenario?.name}</strong>? It will become editable again.
+            </p>
+            {scenarioError && (
+              <p style={{ fontSize: 12, color: '#DC2626', marginBottom: 12 }}>{scenarioError}</p>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button className="btn" onClick={() => setUnlockConfirmOpen(false)} disabled={unlockSaving}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleUnlockScenario}
+                disabled={unlockSaving}
+              >
+                {unlockSaving ? 'Unlocking…' : 'Unlock Scenario'}
               </button>
             </div>
           </div>
@@ -1647,9 +1779,15 @@ export default function PricingEngine() {
             <h3 style={{ fontWeight: 700, fontSize: 16, color: '#DC2626', marginBottom: 8 }}>
               Delete Scenario
             </h3>
-            <p style={{ fontSize: 13, color: '#374151', marginBottom: 20 }}>
-              Delete <strong>{activeScenario?.name}</strong>? This action cannot be undone.
-            </p>
+            {activeScenario?.isLocked ? (
+              <p style={{ fontSize: 13, color: '#374151', marginBottom: 20 }}>
+                <strong>{activeScenario?.name}</strong> is locked. Are you sure you want to permanently delete it? This cannot be undone.
+              </p>
+            ) : (
+              <p style={{ fontSize: 13, color: '#374151', marginBottom: 20 }}>
+                Delete <strong>{activeScenario?.name}</strong>? This action cannot be undone.
+              </p>
+            )}
             {scenarioError && (
               <p style={{ fontSize: 12, color: '#DC2626', marginBottom: 12 }}>{scenarioError}</p>
             )}

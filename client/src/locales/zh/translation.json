@@ -163,7 +163,16 @@
     "toExcel": "导出至 Excel",
     "toPDF": "导出至 PDF",
     "includeUnits": "包含单位明细",
-    "includeSummary": "包含汇总表"
+    "includeSummary": "包含汇总表",
+    "showsuites": "Showsuites 导出",
+    "ssUploadLabel": "上传模板",
+    "ssPreview": "预览匹配",
+    "ssPreviewing": "预览中…",
+    "ssDownload": "下载填充模板",
+    "ssDownloading": "下载中…",
+    "ssMatched": "{{count}} 个单位已匹配，将被填充",
+    "ssUnmatched": "{{count}} 个单位在系统中未找到",
+    "ssNsaWarning": "检测到 NSA 不匹配，上传至 Showsuites 前请核实数据。"
   },
   "generate": {
     "generateUnits": "生成单位",
